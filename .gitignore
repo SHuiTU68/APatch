@@ -10,6 +10,7 @@ key.jks
 key.jks.base64.txt
 .vscode
 .kotlin
+.trae-html-share-packages/
 app/src/main/resources/
 private
 .claude
