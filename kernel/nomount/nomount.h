@@ -46,8 +46,6 @@ DEFINE_STATIC_SRCU(nomount_srcu);
 struct nm_iop {
     struct inode_operations fake_iop; /* MUST be exactly at offset 0 */
     const struct inode_operations *orig_iop;
-    struct dentry_operations fake_dop;
-    const struct dentry_operations *orig_dop;
     struct nomount_dir_node *dir_node;
     struct rcu_head rcu;
 };
@@ -101,11 +99,9 @@ struct nomount_dir_node {
     struct nomount_child_array __rcu *children;
     u64 bloom_mask;
     struct inode *v_inode;
-    union {
-        struct inode *dir_inode;
-        struct nomount_rule *owner_rule;
-        unsigned long _tag_ptr;
-    };
+    unsigned long _tag_ptr;
+    struct nm_iop __rcu *iop;
+    struct nm_fop __rcu *fop;
     seqcount_t seq;
 };
 
@@ -115,7 +111,7 @@ struct nomount_rule {
     unsigned int target_uid;
     u16 v_len;
     u8  flags;
-    struct rcu_head rcu;
+
     struct hlist_node vpath_node;
     struct nomount_dir_node *parent_dir;
     struct nomount_dir_node *this_dir;

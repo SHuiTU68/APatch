@@ -1,9 +1,8 @@
 #!/system/bin/sh
 
-# Built-in NoMount cleanup. The manager recreates the built-in module on the
-# next boot if the feature is still enabled, so this only clears runtime state.
+# Remove old log / exclusion_list
 rm -rf /data/adb/nomount/ || true
 
-# Remove symlinks
+# Remove symlink
 rm -f /data/adb/ksu/bin/nm || true
 rm -f /data/adb/ap/bin/nm || true

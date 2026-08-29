@@ -1,15 +1,16 @@
 #!/system/bin/sh
 
-# Built-in NoMount metamount.sh (APatch, LKM-capable)
+# Built-in NoMount metamount.sh (APatch, dev-branch v2.0.0, LKM-capable)
 # Runs at post-fs-data through the metamodule machinery. Instead of mounting
 # module files into /system with OverlayFS/bind mounts, it walks every active
 # module's partition directory and registers VFS path redirections in RAM.
 #
 # Kernel driver support, in order of preference:
 #   1. NoMount compiled into the kernel (CONFIG_NOMOUNT=y)
-#   2. A matching nomount LKM (nomount-<androidX-Y.Z>.ko) loaded through APatch's
-#      own `apd insmod` (or a bundled ko-loader at $MODDIR/loader as fallback).
-#      LKMs are looked up in $MODDIR/lkm and /data/adb/nomount/lkm.
+#   2. A matching nomount LKM (nomount-<androidX-Y.Z>.ko or nomount.ko) loaded
+#      through APatch's own `apd insmod` (or a bundled ko-loader at
+#      $MODDIR/loader as fallback). LKMs are looked up in $MODDIR/lkm and
+#      /data/adb/nomount/lkm.
 
 MODDIR=${0%/*}
 LOADER="$MODDIR/bin/nm"
@@ -72,6 +73,16 @@ try_load_lkm() {
             done
         done
     fi
+
+    # Final fallback: dev-branch naming (customize.sh renames the matched LKM
+    # to nomount.ko); also covers a plain nomount.ko placed by the user.
+    for dir in "$LKM_DIR1" "$LKM_DIR2"; do
+        [ -f "$dir/nomount.ko" ] || continue
+        if load_ko "$dir/nomount.ko"; then
+            echo "[OK] LKM loaded: nomount.ko" >> "$LOG_FILE"
+            return 0
+        fi
+    done
     return 1
 }
 

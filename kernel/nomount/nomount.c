@@ -148,15 +148,21 @@ static inline void nm_destroy_hijacked_inode(struct inode *inode, bool restore)
     struct nomount_dir_node *dir_node = nm_iop ? nm_iop->dir_node : (nm_fop ? nm_fop->dir_node : NULL);
 
     if (nm_iop) {
+        if (dir_node) RCU_INIT_POINTER(dir_node->iop, NULL);
         if (restore) smp_store_release(&inode->i_op, nm_iop->orig_iop);
         call_rcu(&nm_iop->rcu, nm_iop_rcu_free);
     }
     if (nm_fop) {
+        if (dir_node) RCU_INIT_POINTER(dir_node->fop, NULL);
         if (restore) smp_store_release(&inode->i_fop, nm_fop->orig_fop);
         call_rcu(&nm_fop->rcu, nm_fop_rcu_free);
-    }        
-    if (dir_node && !(dir_node->_tag_ptr & 1UL)) 
-        call_rcu(&dir_node->rcu, nm_dir_rcu_free);
+    }
+    if (dir_node && !(dir_node->_tag_ptr & 1UL)) {
+        smp_mb();
+        if (!rcu_access_pointer(dir_node->children) &&
+             cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
+                call_rcu(&dir_node->rcu, nm_dir_rcu_free);
+    }
 }
 
 struct nomount_proxy_ctx {
@@ -878,7 +884,8 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
             nm_iop->orig_iop = inode->i_op;
             nm_iop->dir_node = dir_node;
 
-            if (nm_iop->orig_iop->lookup) nm_iop->fake_iop.lookup = nomount_hijacked_lookup;
+            nm_iop->fake_iop.lookup = nomount_hijacked_lookup;
+            rcu_assign_pointer(dir_node->iop, nm_iop);
             smp_store_release(&inode->i_op, &nm_iop->fake_iop);
         }
     }
@@ -894,6 +901,7 @@ static inline void nomount_hijack_dir_ops(struct nomount_dir_node *dir_node, str
             if (nm_fop->fake_fop.iterate)
                 nm_fop->fake_fop.iterate = nomount_hijacked_iterate_dir;
 #endif
+            rcu_assign_pointer(dir_node->fop, nm_fop);
             smp_store_release(&inode->i_fop, &nm_fop->fake_fop);
         }
     }
@@ -947,11 +955,10 @@ static void nomount_restore_superblocks(void)
 
 /*** Module Management ***/
 
-static struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
+static __always_inline struct nomount_dir_node *__nomount_alloc_dir_node(struct inode *inode) 
 {
     struct nomount_dir_node *dir_node = kmem_cache_zalloc(nm_dir_cachep, GFP_KERNEL);
     if (unlikely(!dir_node)) return NULL;
-    dir_node->dir_inode = inode ? igrab(inode) : NULL;
     seqcount_init(&dir_node->seq); 
     return dir_node;
 }
@@ -992,11 +999,13 @@ static void __nomount_inject_child_locked(struct nomount_dir_node *dir_node, str
     if (old_count < capacity) {
         write_seqcount_begin(&dir_node->seq);
         if (pos < old_count) {
-            memmove(&old_arr->hashes[pos + 1], &old_arr->hashes[pos], (old_count - pos) * sizeof(u32));
-            memmove(&old_arr->nodes[pos + 1], &old_arr->nodes[pos], (old_count - pos) * sizeof(void *));
+            for (int i = old_count; i > pos; i--) {
+                WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i - 1]));
+                WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i - 1]));
+            }
         }
-        old_arr->hashes[pos] = target_hash;
-        old_arr->nodes[pos] = new_child;
+        WRITE_ONCE(old_arr->hashes[pos], target_hash);
+        WRITE_ONCE(old_arr->nodes[pos], new_child);
         old_arr->count++;
         dir_node->bloom_mask |= (1ULL << (target_hash & 63));
         write_seqcount_end(&dir_node->seq);
@@ -1033,7 +1042,7 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
     struct nomount_dir_node *dir_node = rule->parent_dir;
     struct nomount_child_node *child_to_free = NULL;
     struct nomount_child_array *old_arr;
-    int old_count, target_idx = -1, shift_len;
+    int old_count, target_idx = -1;
     u64 mask = 0;
 
     if (unlikely(!dir_node || !(old_arr = dir_node->children))) return;
@@ -1055,12 +1064,17 @@ static void __nomount_delete_child_locked(struct nomount_rule *rule)
         synchronize_srcu(&nomount_srcu);
         kfree_rcu(old_arr, rcu);
         kfree_rcu(child_to_free, rcu);
+        if (!(dir_node->_tag_ptr & 1UL) && !rcu_access_pointer(dir_node->iop) &&
+             !rcu_access_pointer(dir_node->fop) && cmpxchg(&dir_node->v_inode, NULL, (struct inode *)-1L) == NULL)
+            call_rcu(&dir_node->rcu, nm_dir_rcu_free);
         return;
     }
 
-    if ((shift_len = old_count - 1 - target_idx) > 0) {
-        memmove(&old_arr->hashes[target_idx], &old_arr->hashes[target_idx + 1], shift_len * sizeof(u32));
-        memmove(&old_arr->nodes[target_idx], &old_arr->nodes[target_idx + 1], shift_len * sizeof(void *));
+    if (target_idx < old_count - 1) {
+        for (int i = target_idx; i < old_count - 1; i++) {
+            WRITE_ONCE(old_arr->hashes[i], READ_ONCE(old_arr->hashes[i + 1]));
+            WRITE_ONCE(old_arr->nodes[i], READ_ONCE(old_arr->nodes[i + 1]));
+        }
     }
     old_arr->count--;
 
@@ -1138,7 +1152,7 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
         nm_get_rpath(irule)[0] = '\0';
 
         if (unlikely(!(dir_node = __nomount_alloc_dir_node(NULL)))) {
-            kfree_rcu(irule, rcu);
+            kfree(irule);
             err = -ENOMEM;
             break;
         }
@@ -1161,14 +1175,14 @@ static int nomount_generate_virtual_topology(struct nomount_rule *target_rule)
 
 static void nm_detach_dir_node(struct nomount_dir_node *dir_node)
 {
-    struct inode *inode;
+    struct nm_iop *iop;
+    struct nm_fop *fop;
     if (!dir_node || (dir_node->_tag_ptr & 1UL)) return;
-    if ((inode = dir_node->dir_inode)) {
-        struct nm_iop *nm_iop = __get_nm(smp_load_acquire(&inode->i_op), struct nm_iop, fake_iop, lookup, nomount_hijacked_lookup);
-        struct nm_fop *nm_fop = __get_nm(smp_load_acquire(&inode->i_fop), struct nm_fop, fake_fop, iterate_shared, nomount_hijacked_iterate_dir);
-        if (nm_iop) WRITE_ONCE(nm_iop->dir_node, NULL);
-        if (nm_fop) WRITE_ONCE(nm_fop->dir_node, NULL);
-    }
+
+    rcu_read_lock();
+    if ((iop = rcu_dereference(dir_node->iop))) WRITE_ONCE(iop->dir_node, NULL);
+    if ((fop = rcu_dereference(dir_node->fop))) WRITE_ONCE(fop->dir_node, NULL);
+    rcu_read_unlock();
 }
 
 static void nomount_prune_empty_virtual_dirs(struct nomount_dir_node *dir_node, struct hlist_head *victims)
@@ -1253,7 +1267,7 @@ static void nm_free_rule(struct nomount_rule *rule)
             WRITE_ONCE(rule->this_dir->_tag_ptr, 1UL);
         }
     }
-    kfree_rcu(rule, rcu);
+    kfree(rule);
 }
 
 static void nm_detach_rule_locked(struct nomount_rule *rule, struct hlist_head *victims, bool prune)
@@ -1291,7 +1305,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     if ((err = nomount_generate_virtual_topology(rule)) != 0) {
         up_write(&nomount_rwsem);
         nm_free_rule(rule); 
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
             nm_free_rule(victim_rule);
         return err;
@@ -1301,7 +1315,7 @@ static int __nomount_add_rule(const char *v_path, const char *r_path, u16 v_len,
     up_write(&nomount_rwsem);
 
     if (!hlist_empty(&victims)) {
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(victim_rule, tmp, &victims, vpath_node)
             nm_free_rule(victim_rule);
     }
@@ -1337,7 +1351,7 @@ static void __nomount_clear_all(int clear_flags)
             rule = rb_entry(node, struct nomount_rule, rb_node);
             nm_detach_rule_locked(rule, &r_victims, false);
         }
-        synchronize_srcu(&nomount_srcu);
+        synchronize_rcu(); synchronize_srcu(&nomount_srcu);
         hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) {
             nm_free_rule(rule);
         }
@@ -1399,7 +1413,7 @@ static int nm_process_payload(unsigned long user_addr)
 
             if (!hlist_empty(&r_victims)) {
                 struct nomount_rule *rule; struct hlist_node *tmp;
-                synchronize_srcu(&nomount_srcu);
+                synchronize_rcu(); synchronize_srcu(&nomount_srcu);
                 hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) nm_free_rule(rule);
             } else payload->status = -ENOENT;
             break;

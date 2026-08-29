@@ -46,3 +46,4 @@ metamodule_hot_install() {
 if [ "$MODULE_HOT_INSTALL_REQUEST" = true ]; then
 	metamodule_hot_install
 fi
+

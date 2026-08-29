@@ -88,7 +88,7 @@ The module is produced at `fs/nomount/nomount.ko`.
 
 ## Notes
 
-- Upstream: https://github.com/maxsteeel/nomount
+- Upstream: https://github.com/maxsteeel/nomount (the sources here mirror the `dev` branch)
 - License: GPL-2.0 (same as the Linux kernel), see the upstream repository.
 - The kernel subsystem deliberately keeps a tiny footprint and uses
   SRCU/RCU + seqcount so hooking stays lock-light on hot VFS paths.

@@ -54,9 +54,43 @@ fn provision() -> Result<()> {
             include_str!("../assets/nomount/boot-completed.sh"),
         ),
         ("uninstall.sh", include_str!("../assets/nomount/uninstall.sh")),
+        ("customize.sh", include_str!("../assets/nomount/customize.sh")),
     ] {
         fs::write(module_dir.join(name), content)
             .with_context(|| format!("Failed to write {name}"))?;
+    }
+
+    // WebUI + locale assets (dev branch)
+    let webroot_dir = module_dir.join("webroot");
+    fs::create_dir_all(webroot_dir.join("locales"))?;
+    for (name, content) in [
+        (
+            "index.html",
+            include_str!("../assets/nomount/webroot/index.html"),
+        ),
+        ("index.js", include_str!("../assets/nomount/webroot/index.js")),
+        (
+            "styles.css",
+            include_str!("../assets/nomount/webroot/styles.css"),
+        ),
+        ("theme.css", include_str!("../assets/nomount/webroot/theme.css")),
+    ] {
+        fs::write(webroot_dir.join(name), content)
+            .with_context(|| format!("Failed to write webroot/{name}"))?;
+    }
+    for (name, content) in [
+        ("bn.json", include_str!("../assets/nomount/webroot/locales/bn.json")),
+        ("en.json", include_str!("../assets/nomount/webroot/locales/en.json")),
+        ("es.json", include_str!("../assets/nomount/webroot/locales/es.json")),
+        ("id.json", include_str!("../assets/nomount/webroot/locales/id.json")),
+        ("ja.json", include_str!("../assets/nomount/webroot/locales/ja.json")),
+        ("ru.json", include_str!("../assets/nomount/webroot/locales/ru.json")),
+        ("tr.json", include_str!("../assets/nomount/webroot/locales/tr.json")),
+        ("vi.json", include_str!("../assets/nomount/webroot/locales/vi.json")),
+        ("zh.json", include_str!("../assets/nomount/webroot/locales/zh.json")),
+    ] {
+        fs::write(webroot_dir.join("locales").join(name), content)
+            .with_context(|| format!("Failed to write webroot/locales/{name}"))?;
     }
 
     let bin_dir = module_dir.join("bin");
