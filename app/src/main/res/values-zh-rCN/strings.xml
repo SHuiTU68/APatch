@@ -180,6 +180,8 @@
     <string name="settings_selinux_hide_warning_non_gki">非GKI内核风险更大，可能导致无法开机，请确保已备份数据。</string>
     <string name="settings_nomount">内置 NoMount (VFS 挂载)</string>
     <string name="settings_nomount_summary">用内存中的 VFS 路径重定向替代 OverlayFS/MagicMount。支持内置 NoMount 的内核，或通过匹配的 nomount LKM 工作。</string>
+    <string name="settings_nomount_webui">NoMount 控制页</string>
+    <string name="settings_nomount_webui_summary">打开内置 NoMount 模块的 WebUI 控制页。</string>
     <string name="settings_jailbreak_mode">越狱模式</string>
     <string name="settings_jailbreak_mode_summary">在未修补的内核上加载 KernelPatch 模块。该模式下不允许修补。</string>
     <string name="settings_jailbreak_soft_reboot">软重启</string>

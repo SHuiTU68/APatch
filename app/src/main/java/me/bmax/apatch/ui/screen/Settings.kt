@@ -39,6 +39,7 @@ import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material.icons.filled.Update
+import androidx.compose.material.icons.filled.Web
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -68,6 +69,7 @@ import me.bmax.apatch.APApplication
 import me.bmax.apatch.BuildConfig
 import me.bmax.apatch.Natives
 import me.bmax.apatch.R
+import me.bmax.apatch.ui.WebUIActivity
 import me.bmax.apatch.ui.component.ArrowItem
 import me.bmax.apatch.ui.component.SwitchItem
 import me.bmax.apatch.ui.component.rememberLoadingDialog
@@ -234,6 +236,19 @@ fun SettingScreen() {
                                 }
                             }
                         }
+                    })
+                // NoMount WebUI control panel: built-in module, load its webroot
+                // directly through the same WebUI loader used for AP modules.
+                ArrowItem(
+                    icon = Icons.Filled.Web,
+                    title = stringResource(id = R.string.settings_nomount_webui),
+                    summary = stringResource(id = R.string.settings_nomount_webui_summary),
+                    onClick = {
+                        context.startActivity(
+                            Intent(context, WebUIActivity::class.java)
+                                .putExtra("id", "nomount")
+                                .putExtra("name", "NoMount")
+                        )
                     })
             }
 

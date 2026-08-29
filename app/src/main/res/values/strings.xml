@@ -41,6 +41,8 @@
     <string name="settings_selinux_hide_warning_non_gki">"Non-GKI kernels carry a higher risk and may cause boot failure. Make sure your data is backed up."</string>
     <string name="settings_nomount">Built-in NoMount (VFS mounting)</string>
     <string name="settings_nomount_summary">"Replace OverlayFS/MagicMount with in-RAM VFS path redirection. Works with a NoMount-enabled kernel or via a matching nomount LKM."</string>
+    <string name="settings_nomount_webui">NoMount control panel</string>
+    <string name="settings_nomount_webui_summary">"Open the WebUI control page of the built-in NoMount module."</string>
     <string name="settings_jailbreak_mode">Jailbreak mode</string>
     <string name="settings_jailbreak_mode_summary">"Load the KernelPatch module on a stock kernel. Patching is not allowed in this mode."</string>
     <string name="settings_jailbreak_soft_reboot">Soft reboot</string>
