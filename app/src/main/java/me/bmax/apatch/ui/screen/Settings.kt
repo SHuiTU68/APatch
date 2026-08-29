@@ -1,0 +1,762 @@
+package me.bmax.apatch.ui.screen
+
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.util.Log
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.StringRes
+import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.ColorLens
+import androidx.compose.material.icons.filled.Commit
+import androidx.compose.material.icons.filled.DarkMode
+import androidx.compose.material.icons.filled.DeveloperMode
+import androidx.compose.material.icons.filled.Engineering
+import androidx.compose.material.icons.automirrored.filled.FeaturedPlayList
+import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.FormatColorFill
+import androidx.compose.material.icons.filled.InvertColors
+import androidx.compose.material.icons.filled.Save
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material.icons.filled.Update
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringArrayResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import androidx.core.content.edit
+import androidx.core.os.LocaleListCompat
+import com.ramcosta.composedestinations.annotation.Destination
+import com.ramcosta.composedestinations.annotation.RootGraph
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import me.bmax.apatch.APApplication
+import me.bmax.apatch.BuildConfig
+import me.bmax.apatch.Natives
+import me.bmax.apatch.R
+import me.bmax.apatch.ui.component.ArrowItem
+import me.bmax.apatch.ui.component.SwitchItem
+import me.bmax.apatch.ui.component.rememberLoadingDialog
+import me.bmax.apatch.ui.theme.refreshTheme
+import me.bmax.apatch.util.getBugreportFile
+import me.bmax.apatch.util.getKernelVersionCode
+import me.bmax.apatch.util.isGkiKernel
+import me.bmax.apatch.util.isGlobalNamespaceEnabled
+import me.bmax.apatch.util.isNoMountEnabled
+import me.bmax.apatch.util.outputStream
+import me.bmax.apatch.util.rootShellForResult
+import me.bmax.apatch.util.setGlobalNamespaceEnabled
+import me.bmax.apatch.util.setNoMountEnabled
+import me.bmax.apatch.util.ui.LocalSnackbarHost
+import me.bmax.apatch.util.ui.NavigationBarsSpacer
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Scaffold
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.SnackbarHost
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.window.WindowBottomSheet
+import top.yukonga.miuix.kmp.window.WindowDialog
+
+@Destination<RootGraph>
+@Composable
+fun SettingScreen() {
+    val state by APApplication.apStateLiveData.observeAsState(APApplication.State.UNKNOWN_STATE)
+    val kPatchReady = state != APApplication.State.UNKNOWN_STATE
+    val aPatchReady =
+        (state == APApplication.State.ANDROIDPATCH_INSTALLING || state == APApplication.State.ANDROIDPATCH_INSTALLED || state == APApplication.State.ANDROIDPATCH_NEED_UPDATE)
+    var isGlobalNamespaceEnabled by rememberSaveable {
+        mutableStateOf(false)
+    }
+    var namespaceLoaded by remember { mutableStateOf(false) }
+    // The check shells out as root; run it once off the main thread instead of
+    // synchronously in composition on every recomposition. The switch stays
+    // disabled until the real value lands so a fast tap can't act on the
+    // placeholder and get overwritten by the late result.
+    LaunchedEffect(kPatchReady && aPatchReady) {
+        if (kPatchReady && aPatchReady) {
+            isGlobalNamespaceEnabled = withContext(Dispatchers.IO) { isGlobalNamespaceEnabled() }
+            namespaceLoaded = true
+        }
+    }
+
+    var isNoMountEnabled by rememberSaveable {
+        mutableStateOf(false)
+    }
+    var noMountLoaded by remember { mutableStateOf(false) }
+    LaunchedEffect(kPatchReady && aPatchReady) {
+        if (kPatchReady && aPatchReady) {
+            isNoMountEnabled = withContext(Dispatchers.IO) { isNoMountEnabled() }
+            noMountLoaded = true
+        }
+    }
+
+    val snackBarHost = LocalSnackbarHost.current
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = stringResource(R.string.settings),
+            )
+        },
+        snackbarHost = { SnackbarHost(snackBarHost) }
+    ) { paddingValues ->
+
+        val loadingDialog = rememberLoadingDialog()
+
+        val showLanguageDialog = rememberSaveable { mutableStateOf(false) }
+        LanguageDialog(showLanguageDialog)
+
+        val showResetSuPathDialog = remember { mutableStateOf(false) }
+        if (showResetSuPathDialog.value) {
+            ResetSUPathDialog(showResetSuPathDialog)
+        }
+
+        val showThemeChooseDialog = remember { mutableStateOf(false) }
+        if (showThemeChooseDialog.value) {
+            ThemeChooseDialog(showThemeChooseDialog)
+        }
+
+        var showLogBottomSheet by remember { mutableStateOf(false) }
+        val saveLog = stringResource(R.string.save_log)
+
+        val scope = rememberCoroutineScope()
+        val context = LocalContext.current
+        val logSavedMessage = stringResource(R.string.log_saved)
+        val exportBugreportLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.CreateDocument("application/gzip")
+        ) { uri: Uri? ->
+            if (uri != null) {
+                scope.launch(Dispatchers.IO) {
+                    loadingDialog.show()
+                    uri.outputStream().use { output ->
+                        getBugreportFile(context).inputStream().use {
+                            it.copyTo(output)
+                        }
+                    }
+                    loadingDialog.hide()
+                    snackBarHost.showSnackbar(message = logSavedMessage)
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .padding(paddingValues)
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+        ) {
+
+            val context = LocalContext.current
+            val scope = rememberCoroutineScope()
+            val prefs = APApplication.sharedPreferences
+
+            // Global mount
+            if (kPatchReady && aPatchReady) {
+                SwitchItem(
+                    icon = Icons.Filled.Engineering,
+                    title = stringResource(id = R.string.settings_global_namespace_mode),
+                    summary = stringResource(id = R.string.settings_global_namespace_mode_summary),
+                    checked = isGlobalNamespaceEnabled,
+                    enabled = namespaceLoaded,
+                    onCheckedChange = {
+                        setGlobalNamespaceEnabled(
+                            if (isGlobalNamespaceEnabled) {
+                                "0"
+                            } else {
+                                "1"
+                            }
+                        )
+                        isGlobalNamespaceEnabled = it
+                    })
+            }
+
+            // Built-in NoMount (VFS path redirection) metamodule
+            if (kPatchReady && aPatchReady) {
+                SwitchItem(
+                    icon = Icons.Filled.AltRoute,
+                    title = stringResource(id = R.string.settings_nomount),
+                    summary = stringResource(id = R.string.settings_nomount_summary),
+                    checked = isNoMountEnabled,
+                    enabled = noMountLoaded,
+                    onCheckedChange = { enabled ->
+                        scope.launch(Dispatchers.IO) {
+                            val result = setNoMountEnabled(enabled)
+                            if (result) {
+                                isNoMountEnabled = enabled
+                            } else {
+                                withContext(Dispatchers.Main) {
+                                    snackBarHost.showSnackbar(
+                                        message = context.getString(R.string.failure)
+                                    )
+                                }
+                            }
+                        }
+                    })
+            }
+
+            // Legacy sucompat (path_probe) support
+            if (kPatchReady && aPatchReady) {
+                var sucompatEnabled by rememberSaveable {
+                    mutableStateOf(
+                        prefs.getBoolean("sucompat_enabled", false)
+                    )
+                }
+                SwitchItem(
+                    icon = Icons.AutoMirrored.Filled.FeaturedPlayList,
+                    title = stringResource(id = R.string.settings_sucompat),
+                    summary = stringResource(id = R.string.settings_sucompat_summary),
+                    checked = sucompatEnabled,
+                    onCheckedChange = { enabled ->
+                        scope.launch(Dispatchers.IO) {
+                            val result = if (enabled) {
+                                // Enable: create marker file and register hooks via supercall
+                                rootShellForResult("touch ${APApplication.SUCOMPAT_FILE}")
+                                Natives.controlFeature("sucompat_extra", true)
+                            } else {
+                                // Disable: remove marker file and unregister hooks via supercall
+                                rootShellForResult("rm -f ${APApplication.SUCOMPAT_FILE}")
+                                Natives.controlFeature("sucompat_extra", false)
+                            }
+                            Log.d("SucompatToggle", "sucompat_extra ${if (enabled) "enable" else "disable"} result: $result")
+                            if (result == 0L) {
+                                prefs.edit { putBoolean("sucompat_enabled", enabled) }
+                                sucompatEnabled = enabled
+                            }
+                        }
+                    })
+            }
+
+            // Hide SELinux modification (test)
+            if (kPatchReady && aPatchReady) {
+                val kernelVersion = remember { getKernelVersionCode() }
+                val kernelSupported = (kernelVersion ?: 0) >= 419
+                val isGki = remember { isGkiKernel() }
+                var selinuxHideEnabled by rememberSaveable {
+                    mutableStateOf(prefs.getBoolean("selinux_hide_enabled", false))
+                }
+                val showSelinuxHideWarning = remember { mutableStateOf(false) }
+
+                fun applySelinuxHide(enabled: Boolean) {
+                    scope.launch(Dispatchers.IO) {
+                        val command = if (enabled) {
+                            "touch ${APApplication.SELINUX_HIDE_FILE}"
+                        } else {
+                            "rm -f ${APApplication.SELINUX_HIDE_FILE}"
+                        }
+                        val result = rootShellForResult(command)
+                        Log.d("SelinuxHideToggle", "$command result: ${result.code}")
+                        if (result.isSuccess) {
+                            prefs.edit { putBoolean("selinux_hide_enabled", enabled) }
+                            selinuxHideEnabled = enabled
+                        }
+                    }
+                }
+
+                SwitchItem(
+                    icon = Icons.Filled.Security,
+                    title = stringResource(id = R.string.settings_selinux_hide),
+                    summary = stringResource(id = R.string.settings_selinux_hide_summary),
+                    checked = selinuxHideEnabled,
+                    enabled = kernelSupported,
+                    onCheckedChange = { enabled ->
+                        if (enabled) {
+                            // Only tested on 5.10+, and non-GKI carries a bigger risk, so warn first.
+                            val below510 = (kernelVersion ?: 0) < 510
+                            if (below510 || !isGki) {
+                                showSelinuxHideWarning.value = true
+                            } else {
+                                applySelinuxHide(true)
+                            }
+                        } else {
+                            applySelinuxHide(false)
+                        }
+                    }
+                )
+
+                if (showSelinuxHideWarning.value) {
+                    SelinuxHideWarningDialog(
+                        showDialog = showSelinuxHideWarning,
+                        kernelVersion = kernelVersion,
+                        isGki = isGki,
+                        onConfirm = { applySelinuxHide(true) },
+                    )
+                }
+            }
+
+            // WebView Debug
+            if (aPatchReady) {
+                var enableWebDebugging by rememberSaveable {
+                    mutableStateOf(
+                        prefs.getBoolean("enable_web_debugging", false)
+                    )
+                }
+                SwitchItem(
+                    icon = Icons.Filled.DeveloperMode,
+                    title = stringResource(id = R.string.enable_web_debugging),
+                    summary = stringResource(id = R.string.enable_web_debugging_summary),
+                    checked = enableWebDebugging
+                ) {
+                    APApplication.sharedPreferences.edit {
+                        putBoolean("enable_web_debugging", it)
+                    }
+                    enableWebDebugging = it
+                }
+            }
+
+            // Check Update
+            var checkUpdate by rememberSaveable {
+                mutableStateOf(
+                    prefs.getBoolean("check_update", true)
+                )
+            }
+
+            SwitchItem(
+                icon = Icons.Filled.Update,
+                title = stringResource(id = R.string.settings_check_update),
+                summary = stringResource(id = R.string.settings_check_update_summary),
+                checked = checkUpdate
+            ) {
+                prefs.edit { putBoolean("check_update", it) }
+                checkUpdate = it
+            }
+
+            // Night Mode Follow System
+            var nightFollowSystem by rememberSaveable {
+                mutableStateOf(
+                    prefs.getBoolean("night_mode_follow_sys", true)
+                )
+            }
+            SwitchItem(
+                icon = Icons.Filled.InvertColors,
+                title = stringResource(id = R.string.settings_night_mode_follow_sys),
+                summary = stringResource(id = R.string.settings_night_mode_follow_sys_summary),
+                checked = nightFollowSystem
+            ) {
+                prefs.edit { putBoolean("night_mode_follow_sys", it) }
+                nightFollowSystem = it
+                refreshTheme.value = true
+            }
+
+            // Custom Night Theme Switch
+            if (!nightFollowSystem) {
+                var nightThemeEnabled by rememberSaveable {
+                    mutableStateOf(
+                        prefs.getBoolean("night_mode_enabled", false)
+                    )
+                }
+                SwitchItem(
+                    icon = Icons.Filled.DarkMode,
+                    title = stringResource(id = R.string.settings_night_theme_enabled),
+                    summary = "",
+                    checked = nightThemeEnabled
+                ) {
+                    prefs.edit { putBoolean("night_mode_enabled", it) }
+                    nightThemeEnabled = it
+                    refreshTheme.value = true
+                }
+            }
+
+            // System dynamic color theme
+            val isDynamicColorSupport = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+            if (isDynamicColorSupport) {
+                var useSystemDynamicColor by rememberSaveable {
+                    mutableStateOf(
+                        prefs.getBoolean("use_system_color_theme", true)
+                    )
+                }
+                SwitchItem(
+                    icon = Icons.Filled.ColorLens,
+                    title = stringResource(id = R.string.settings_use_system_color_theme),
+                    summary = stringResource(id = R.string.settings_use_system_color_theme_summary),
+                    checked = useSystemDynamicColor
+                ) {
+                    prefs.edit { putBoolean("use_system_color_theme", it) }
+                    useSystemDynamicColor = it
+                    refreshTheme.value = true
+                }
+
+                if (!useSystemDynamicColor) {
+                    val colorMode = prefs.getString("custom_color", "blue")
+                    ArrowItem(
+                        title = stringResource(id = R.string.settings_custom_color_theme),
+                        summary = stringResource(colorNameToString(colorMode.toString())),
+                        icon = Icons.Filled.FormatColorFill,
+                        onClick = { showThemeChooseDialog.value = true }
+                    )
+                }
+            } else {
+                val colorMode = prefs.getString("custom_color", "blue")
+                ArrowItem(
+                    title = stringResource(id = R.string.settings_custom_color_theme),
+                    summary = stringResource(colorNameToString(colorMode.toString())),
+                    icon = Icons.Filled.FormatColorFill,
+                    onClick = { showThemeChooseDialog.value = true }
+                )
+            }
+
+            // su path
+            if (kPatchReady) {
+                ArrowItem(
+                    title = stringResource(id = R.string.setting_reset_su_path),
+                    summary = "",
+                    icon = Icons.Filled.Commit,
+                    onClick = { showResetSuPathDialog.value = true }
+                )
+            }
+
+            // language
+            val currentLanguage = AppCompatDelegate.getApplicationLocales()[0]?.displayLanguage?.replaceFirstChar {
+                if (it.isLowerCase()) it.titlecase(
+                    Locale.getDefault()
+                ) else it.toString()
+            } ?: stringResource(id = R.string.system_default)
+            ArrowItem(
+                title = stringResource(id = R.string.settings_app_language),
+                summary = currentLanguage,
+                icon = Icons.Filled.Translate,
+                onClick = { showLanguageDialog.value = true }
+            )
+
+            // log
+            ArrowItem(
+                title = stringResource(id = R.string.send_log),
+                summary = "",
+                icon = Icons.Filled.BugReport,
+                onClick = { showLogBottomSheet = true }
+            )
+            if (showLogBottomSheet) {
+                WindowBottomSheet(
+                    show = showLogBottomSheet,
+                    title = stringResource(id = R.string.send_log),
+                    onDismissRequest = { showLogBottomSheet = false },
+                    content = {
+                        Row(
+                            modifier = Modifier
+                                .padding(10.dp)
+                                .align(Alignment.CenterHorizontally)
+
+                        ) {
+                            Box {
+                                Column(
+                                    modifier = Modifier
+                                        .padding(16.dp)
+                                        .clickable {
+                                            scope.launch {
+                                                val formatter =
+                                                    DateTimeFormatter.ofPattern("yyyy-MM-dd_HH_mm")
+                                                val current = LocalDateTime.now().format(formatter)
+                                                exportBugreportLauncher.launch("APatch_bugreport_${current}.tar.gz")
+                                                showLogBottomSheet = false
+                                            }
+                                        }
+                                ) {
+                                    Icon(
+                                        Icons.Filled.Save,
+                                        contentDescription = null,
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    )
+                                    Text(
+                                        text = stringResource(id = R.string.save_log),
+                                        modifier = Modifier.padding(top = 16.dp),
+                                        textAlign = TextAlign.Center
+
+                                    )
+                                }
+
+                            }
+                            Box {
+                                Column(
+                                    modifier = Modifier
+                                        .padding(16.dp)
+                                        .clickable {
+                                            scope.launch {
+                                                val bugreport = loadingDialog.withLoading {
+                                                    withContext(Dispatchers.IO) {
+                                                        getBugreportFile(context)
+                                                    }
+                                                }
+
+                                                val uri: Uri = FileProvider.getUriForFile(
+                                                    context,
+                                                    "${BuildConfig.APPLICATION_ID}.fileprovider",
+                                                    bugreport
+                                                )
+
+                                                val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                                                    putExtra(Intent.EXTRA_STREAM, uri)
+                                                    setDataAndType(uri, "application/gzip")
+                                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                }
+
+                                                context.startActivity(
+                                                    Intent.createChooser(
+                                                        shareIntent,
+                                                        saveLog
+                                                    )
+                                                )
+                                                showLogBottomSheet = false
+                                            }
+                                        }) {
+                                    Icon(
+                                        Icons.Filled.Share,
+                                        contentDescription = null,
+                                        modifier = Modifier.align(Alignment.CenterHorizontally)
+                                    )
+                                    Text(
+                                        text = stringResource(id = R.string.send_log),
+                                        modifier = Modifier.padding(top = 16.dp),
+                                        textAlign = TextAlign.Center
+
+                                    )
+                                }
+
+                            }
+                        }
+                        NavigationBarsSpacer()
+                    })
+            }
+
+
+        }
+
+    }
+}
+
+@Composable
+fun ThemeChooseDialog(showDialog: MutableState<Boolean>) {
+    val prefs = APApplication.sharedPreferences
+
+    WindowDialog(
+        show = showDialog.value,
+        title = stringResource(id = R.string.settings_custom_color_theme),
+        onDismissRequest = { showDialog.value = false }
+    ) {
+        LazyColumn {
+            items(colorsList()) { color ->
+                BasicComponent(
+                    title = stringResource(color.nameId),
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = {
+                        showDialog.value = false
+                        prefs.edit { putString("custom_color", color.name) }
+                        refreshTheme.value = true
+                    }
+                )
+            }
+        }
+    }
+
+}
+
+private data class APColor(
+    val name: String, @param:StringRes val nameId: Int
+)
+
+private fun colorsList(): List<APColor> {
+    return listOf(
+        APColor("amber", R.string.amber_theme),
+        APColor("blue_grey", R.string.blue_grey_theme),
+        APColor("blue", R.string.blue_theme),
+        APColor("brown", R.string.brown_theme),
+        APColor("cyan", R.string.cyan_theme),
+        APColor("deep_orange", R.string.deep_orange_theme),
+        APColor("deep_purple", R.string.deep_purple_theme),
+        APColor("green", R.string.green_theme),
+        APColor("indigo", R.string.indigo_theme),
+        APColor("light_blue", R.string.light_blue_theme),
+        APColor("light_green", R.string.light_green_theme),
+        APColor("lime", R.string.lime_theme),
+        APColor("orange", R.string.orange_theme),
+        APColor("pink", R.string.pink_theme),
+        APColor("purple", R.string.purple_theme),
+        APColor("red", R.string.red_theme),
+        APColor("sakura", R.string.sakura_theme),
+        APColor("teal", R.string.teal_theme),
+        APColor("yellow", R.string.yellow_theme),
+    )
+}
+
+@Composable
+private fun colorNameToString(colorName: String): Int {
+    return colorsList().find { it.name == colorName }?.nameId ?: R.string.blue_theme
+}
+
+val suPathChecked: (path: String) -> Boolean = {
+    it.startsWith("/") && it.trim().length > 1
+}
+
+@Composable
+fun ResetSUPathDialog(showDialog: MutableState<Boolean>) {
+    val context = LocalContext.current
+    var suPath by remember { mutableStateOf(Natives.suPath()) }
+    WindowDialog(
+        show = showDialog.value,
+        title = stringResource(id = R.string.setting_reset_su_path),
+        onDismissRequest = { showDialog.value = false }
+    ) {
+        TextField(
+            value = suPath,
+            onValueChange = {
+                suPath = it
+            },
+            label = stringResource(id = R.string.setting_reset_su_new_path),
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                text = stringResource(id = android.R.string.cancel),
+                onClick = { showDialog.value = false }
+            )
+
+            TextButton(
+                text = stringResource(id = android.R.string.ok),
+                enabled = suPathChecked(suPath),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                onClick = {
+                    showDialog.value = false
+                    val success = Natives.resetSuPath(suPath)
+                    Toast.makeText(
+                        context,
+                        if (success) R.string.success else R.string.failure,
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    rootShellForResult("echo $suPath > ${APApplication.SU_PATH_FILE}")
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun SelinuxHideWarningDialog(
+    showDialog: MutableState<Boolean>,
+    kernelVersion: Int?,
+    isGki: Boolean,
+    onConfirm: () -> Unit,
+) {
+    WindowDialog(
+        show = showDialog.value,
+        title = stringResource(id = R.string.settings_selinux_hide_warning_title),
+        onDismissRequest = { showDialog.value = false }
+    ) {
+        if ((kernelVersion ?: 0) < 510) {
+            Text(
+                text = stringResource(id = R.string.settings_selinux_hide_warning_below_5_10),
+                style = MiuixTheme.textStyles.body2,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+        if (!isGki) {
+            Text(
+                text = stringResource(id = R.string.settings_selinux_hide_warning_non_gki),
+                style = MiuixTheme.textStyles.body2,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                text = stringResource(id = android.R.string.cancel),
+                onClick = { showDialog.value = false }
+            )
+
+            TextButton(
+                text = stringResource(id = android.R.string.ok),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                onClick = {
+                    showDialog.value = false
+                    onConfirm()
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun LanguageDialog(showLanguageDialog: MutableState<Boolean>) {
+
+    val languages = stringArrayResource(id = R.array.languages)
+    val languagesValues = stringArrayResource(id = R.array.languages_values)
+
+    if (showLanguageDialog.value) {
+        WindowDialog(
+            show = showLanguageDialog.value,
+            title = stringResource(id = R.string.settings_app_language),
+            onDismissRequest = { showLanguageDialog.value = false }
+        ) {
+            LazyColumn {
+                itemsIndexed(languages) { index, item ->
+                    BasicComponent(
+                        title = item,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            showLanguageDialog.value = false
+                            if (index == 0) {
+                                AppCompatDelegate.setApplicationLocales(
+                                    LocaleListCompat.getEmptyLocaleList()
+                                )
+                            } else {
+                                AppCompatDelegate.setApplicationLocales(
+                                    LocaleListCompat.forLanguageTags(
+                                        languagesValues[index]
+                                    )
+                                )
+                            }
+                        }
+                    )
+                }
+            }
+        }
+    }
+}

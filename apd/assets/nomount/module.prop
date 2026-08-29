@@ -1,0 +1,7 @@
+id=nomount
+metamodule=true
+name=NoMount (Built-in)
+version=v2.0.0-apatch
+versionCode=20000
+author=maxsteeel + APatch
+description=A built-in metamodule that replaces OverlayFS/MagicMount with VFS path redirection. Works with kernels that have NoMount built-in (CONFIG_NOMOUNT=y) or via a matching nomount LKM.
