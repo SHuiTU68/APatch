@@ -189,7 +189,7 @@ fun registerDownloadTask(
         doLast {
             if (!destFile.exists() || isFileUpdated(srcUrl, destFile)) {
                 println(" - Downloading $srcUrl to ${destFile.absolutePath}")
-                downloadFile(srcUrl, destFile)
+                downloadFileRetry(srcUrl, destFile)
                 println(" - Download completed.")
             } else {
                 println(" - File is up-to-date, skipping download.")
@@ -199,16 +199,16 @@ fun registerDownloadTask(
 }
 
 fun isFileUpdated(url: String, localFile: File): Boolean {
-    val connection = URI.create(url).toURL().openConnection()
-    val remoteLastModified = connection.getHeaderFieldDate("Last-Modified", 0L)
-    return remoteLastModified > localFile.lastModified()
-}
-
-fun downloadFile(url: String, destFile: File) {
-    URI.create(url).toURL().openStream().use { input ->
-        destFile.outputStream().use { output ->
-            input.copyTo(output)
-        }
+    return try {
+        val connection = URI.create(url).toURL().openConnection()
+        connection.connectTimeout = 15000
+        connection.readTimeout = 15000
+        val remoteLastModified = connection.getHeaderFieldDate("Last-Modified", 0L)
+        remoteLastModified > localFile.lastModified()
+    } catch (e: Exception) {
+        // If we can't check the remote, assume an update is needed and let
+        // downloadFileRetry handle the actual download with retries.
+        true
     }
 }
 
