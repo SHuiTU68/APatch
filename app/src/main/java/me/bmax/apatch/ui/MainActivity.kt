@@ -30,8 +30,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailItem
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -42,6 +49,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.NavBackStackEntry
@@ -58,20 +66,8 @@ import com.ramcosta.composedestinations.utils.rememberDestinationsNavigator
 import me.bmax.apatch.APApplication
 import me.bmax.apatch.ui.screen.BottomBarDestination
 import me.bmax.apatch.ui.theme.APatchTheme
-import me.bmax.apatch.ui.theme.blurEffect
-import me.bmax.apatch.ui.theme.getAppBarColor
-import me.bmax.apatch.ui.theme.rememberBlurBackdrop
-import me.bmax.apatch.ui.theme.withBackdrop
 import me.bmax.apatch.ui.viewmodel.SuperUserViewModel
 import me.bmax.apatch.util.ui.LocalSnackbarHost
-import top.yukonga.miuix.kmp.basic.NavigationBar
-import top.yukonga.miuix.kmp.basic.NavigationBarItem
-import top.yukonga.miuix.kmp.basic.NavigationRail
-import top.yukonga.miuix.kmp.basic.NavigationRailItem
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SnackbarHost
-import top.yukonga.miuix.kmp.basic.SnackbarHostState
-import top.yukonga.miuix.kmp.blur.LayerBackdrop
 
 class MainActivity : AppCompatActivity() {
 
@@ -105,8 +101,6 @@ class MainActivity : AppCompatActivity() {
                         !(destination.kPatchRequired && !kPatchReady) && !(destination.aPatchRequired && !aPatchReady)
                     }.toSet()
                 }
-
-                val backdrop = rememberBlurBackdrop()
 
                 val defaultTransitions = object : NavHostAnimatedDestinationStyle() {
                     override val enterTransition: AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition =
@@ -163,26 +157,20 @@ class MainActivity : AppCompatActivity() {
                 Scaffold(
                     bottomBar = {
                         if (configuration.orientation == Configuration.ORIENTATION_PORTRAIT) {
-                            BottomBar(navController, visibleDestinations, backdrop)
+                            BottomBar(navController, visibleDestinations)
                         }
                     },
-                    snackbarHost = { SnackbarHost(state = snackBarHostState) },
                     contentWindowInsets = WindowInsets(0, 0, 0, 0)
                 ) { innerPadding ->
                     CompositionLocalProvider(
                         LocalSnackbarHost provides snackBarHostState,
                     ) {
                         if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Horizontal))
-                                    .withBackdrop(backdrop)
-                            ) {
+                            Row(modifier = Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Horizontal))) {
                                 SideBar(
                                     navController = navController,
-                                    visibleDestinations = visibleDestinations,
-                                    backdrop = backdrop
+                                    modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top)),
+                                    visibleDestinations = visibleDestinations
                                 )
                                 DestinationsNavHost(
                                     modifier = Modifier
@@ -196,10 +184,7 @@ class MainActivity : AppCompatActivity() {
                             }
                         } else {
                             DestinationsNavHost(
-                                modifier = Modifier
-                                    .padding(innerPadding)
-                                    .consumeWindowInsets(innerPadding)
-                                    .withBackdrop(backdrop),
+                                modifier = Modifier.padding(innerPadding).consumeWindowInsets(innerPadding),
                                 navGraph = NavGraphs.root,
                                 navController = navController,
                                 engine = rememberNavHostEngine(navHostContentAlignment = Alignment.TopCenter),
@@ -227,21 +212,14 @@ class MainActivity : AppCompatActivity() {
 }
 
 @Composable
-private fun BottomBar(
-    navController: NavHostController,
-    visibleDestinations: Set<BottomBarDestination>,
-    backdrop: LayerBackdrop?
-) {
+private fun BottomBar(navController: NavHostController, visibleDestinations: Set<BottomBarDestination>) {
     val navigator = navController.rememberDestinationsNavigator()
 
     Crossfade(
         targetState = visibleDestinations,
         label = "BottomBarStateCrossfade"
     ) { visibleDestinations ->
-        NavigationBar(
-            modifier = Modifier.blurEffect(backdrop),
-            color = backdrop.getAppBarColor()
-        ) {
+        NavigationBar(tonalElevation = 8.dp) {
             visibleDestinations.forEach { destination ->
                 val isCurrentDestOnBackStack by navController.isRouteOnBackStackAsState(destination.direction)
 
@@ -259,12 +237,22 @@ private fun BottomBar(
                             restoreState = true
                         }
                     },
-                    icon = if (isCurrentDestOnBackStack) {
-                        destination.iconSelected
-                    } else {
-                        destination.iconNotSelected
+                    icon = {
+                        if (isCurrentDestOnBackStack) {
+                            Icon(destination.iconSelected, stringResource(destination.label))
+                        } else {
+                            Icon(destination.iconNotSelected, stringResource(destination.label))
+                        }
                     },
-                    label = stringResource(destination.label)
+                    label = {
+                        Text(
+                            text = stringResource(destination.label),
+                            overflow = TextOverflow.Visible,
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                    },
+                    alwaysShowLabel = false
                 )
             }
         }
@@ -272,11 +260,7 @@ private fun BottomBar(
 }
 
 @Composable
-private fun SideBar(
-    navController: NavHostController,
-    visibleDestinations: Set<BottomBarDestination>,
-    backdrop: LayerBackdrop?
-) {
+private fun SideBar(navController: NavHostController, modifier: Modifier = Modifier, visibleDestinations: Set<BottomBarDestination>) {
     val navigator = navController.rememberDestinationsNavigator()
 
     Crossfade(
@@ -284,18 +268,15 @@ private fun SideBar(
         label = "SideBarStateCrossfade"
     ) { visibleDestinations ->
         NavigationRail(
-            modifier = Modifier.blurEffect(backdrop),
-            color = backdrop.getAppBarColor(),
+            modifier = modifier,
+            containerColor = MaterialTheme.colorScheme.background,
         ) {
             Column(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .verticalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxHeight(),
                 verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
             ) {
                 visibleDestinations.forEach { destination ->
                     val isCurrentDestOnBackStack by navController.isRouteOnBackStackAsState(destination.direction)
-
                     NavigationRailItem(
                         selected = isCurrentDestOnBackStack,
                         onClick = {
@@ -310,12 +291,15 @@ private fun SideBar(
                                 restoreState = true
                             }
                         },
-                        icon = if (isCurrentDestOnBackStack) {
-                            destination.iconSelected
-                        } else {
-                            destination.iconNotSelected
+                        icon = {
+                            if (isCurrentDestOnBackStack) {
+                                Icon(destination.iconSelected, stringResource(destination.label))
+                            } else {
+                                Icon(destination.iconNotSelected, stringResource(destination.label))
+                            }
                         },
-                        label = stringResource(destination.label),
+                        label = { Text(stringResource(destination.label)) },
+                        alwaysShowLabel = false,
                         modifier = Modifier.padding(start = 8.dp)
                     )
                 }

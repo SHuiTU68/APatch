@@ -24,28 +24,26 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.input.TextFieldState
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.FloatingActionButton
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.ListPopupColumn
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.basic.PullToRefresh
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.basic.Switch
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Add
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
-import top.yukonga.miuix.kmp.window.WindowListPopup
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialogDefaults
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SearchBarScrollBehavior
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -69,6 +67,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewModelScope
 import com.ramcosta.composedestinations.annotation.Destination
@@ -90,7 +91,7 @@ import me.bmax.apatch.apApp
 import me.bmax.apatch.ui.component.ConfirmResult
 import me.bmax.apatch.ui.component.KPModuleRemoveButton
 import me.bmax.apatch.ui.component.LoadingDialogHandle
-import me.bmax.apatch.ui.component.MiuixDropdownItem
+import me.bmax.apatch.ui.component.ProvideMenuShape
 import me.bmax.apatch.ui.component.SearchAppBar
 import me.bmax.apatch.ui.component.pinnedScrollBehavior
 import me.bmax.apatch.ui.component.rememberConfirmDialog
@@ -100,6 +101,7 @@ import me.bmax.apatch.ui.viewmodel.KPModuleViewModel
 import me.bmax.apatch.ui.viewmodel.safeKpmModuleId
 import me.bmax.apatch.ui.viewmodel.PatchesViewModel
 import me.bmax.apatch.util.inputStream
+import me.bmax.apatch.util.ui.APDialogBlurBehindUtils
 import me.bmax.apatch.util.writeTo
 import me.bmax.apatch.util.rootShellForResult
 import java.io.IOException
@@ -114,6 +116,7 @@ private data class UninstallResult(
 )
 private lateinit var targetKPMToControl: KPModel.KPMInfo
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Destination<RootGraph>
 @Composable
 fun KPModuleScreen(navigator: DestinationsNavigator) {
@@ -129,7 +132,7 @@ fun KPModuleScreen(navigator: DestinationsNavigator) {
             Row {
                 Text(
                     text = stringResource(id = R.string.kpm_kp_not_installed),
-                    style = MiuixTheme.textStyles.title2
+                    style = MaterialTheme.typography.titleMedium
                 )
             }
         }
@@ -222,46 +225,41 @@ fun KPModuleScreen(navigator: DestinationsNavigator) {
                     onClick = {
                         expanded = !expanded
                     },
-                    containerColor = MiuixTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    containerColor = MaterialTheme.colorScheme.primary,
                 ) {
                     Icon(
-                        imageVector = MiuixIcons.Add,
-                        contentDescription = null,
-                        tint = MiuixTheme.colorScheme.onPrimary
+                        painter = painterResource(id = R.drawable.package_import),
+                        contentDescription = null
                     )
                 }
 
-                WindowListPopup(
-                    show = expanded,
-                    alignment = PopupPositionProvider.Align.TopEnd,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    ListPopupColumn {
-                        options.forEachIndexed { index, label ->
-                            MiuixDropdownItem(
-                                text = label,
-                                optionSize = options.size,
-                                index = index,
-                                onSelectedIndexChange = {
-                                    expanded = false
-                                    when (label) {
-                                        moduleEmbed -> {
-                                            navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_AND_INSTALL))
-                                        }
-
-                                        moduleInstall -> {
-                                            val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "*/*" }
-                                            selectInstallKpmLauncher.launch(intent)
-                                        }
-
-                                        moduleLoad -> {
-                                            val intent = Intent(Intent.ACTION_GET_CONTENT)
-                                            intent.type = "*/*"
-                                            selectKpmLauncher.launch(intent)
-                                        }
+                ProvideMenuShape(RoundedCornerShape(10.dp)) {
+                    DropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false },
+                        properties = PopupProperties(focusable = true)
+                    ) {
+                        options.forEach { label ->
+                            DropdownMenuItem(text = { Text(label) }, onClick = {
+                                expanded = false
+                                when (label) {
+                                    moduleEmbed -> {
+                                        navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_AND_INSTALL))
                                     }
-                                },
-                            )
+
+                                    moduleInstall -> {
+                                        val intent = Intent(Intent.ACTION_GET_CONTENT).apply { type = "*/*" }
+                                        selectInstallKpmLauncher.launch(intent)
+                                    }
+
+                                    moduleLoad -> {
+                                        val intent = Intent(Intent.ACTION_GET_CONTENT)
+                                        intent.type = "*/*"
+                                        selectKpmLauncher.launch(intent)
+                                    }
+                                }
+                            })
                         }
                     }
                 }
@@ -343,64 +341,99 @@ suspend fun installKpm(uri: Uri): Int = withContext(Dispatchers.IO) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KPMControlDialog(showDialog: MutableState<Boolean>, onConfirm: (String) -> Unit) {
-    val controlState = remember { TextFieldState() }
+    var controlParam by remember { mutableStateOf("") }
     var enable by remember { mutableStateOf(false) }
 
-    LaunchedEffect(controlState.text) {
-        enable = controlState.text.isNotEmpty()
-    }
-
-    WindowDialog(
-        show = showDialog.value,
-        title = stringResource(R.string.kpm_control_dialog_title),
-        summary = stringResource(R.string.kpm_control_dialog_content),
-        onDismissRequest = { showDialog.value = false }
-    ) {
-        TextField(
-            state = controlState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 6.dp),
-            label = stringResource(id = R.string.kpm_control_paramters)
+    BasicAlertDialog(
+        onDismissRequest = { showDialog.value = false }, properties = DialogProperties(
+            decorFitsSystemWindows = true,
+            usePlatformDefaultWidth = false,
         )
-
-        Spacer(modifier = Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End
+    ) {
+        Surface(
+            modifier = Modifier
+                .width(310.dp)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(30.dp),
+            tonalElevation = AlertDialogDefaults.TonalElevation,
+            color = AlertDialogDefaults.containerColor,
         ) {
-            TextButton(
-                text = stringResource(id = android.R.string.cancel),
-                onClick = { showDialog.value = false },
-                modifier = Modifier.weight(1f),
-            )
+            Column(modifier = Modifier.padding(PaddingValues(all = 24.dp))) {
+                Box(
+                    Modifier
+                        .padding(PaddingValues(bottom = 16.dp))
+                        .align(Alignment.Start)
+                ) {
+                    Text(
+                        text = stringResource(id = R.string.kpm_control_dialog_title),
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                }
 
-            Spacer(modifier = Modifier.width(20.dp))
+                Box(
+                    Modifier
+                        .weight(weight = 1f, fill = false)
+                        .align(Alignment.Start)
+                ) {
+                    Text(
+                        text = stringResource(id = R.string.kpm_control_dialog_content),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
 
-            TextButton(
-                text = stringResource(id = android.R.string.ok),
-                onClick = {
-                    showDialog.value = false
-                    // Run the control on the caller's scope: this dialog leaves
-                    // composition here, cancelling any scope it owns.
-                    onConfirm(controlState.text.toString())
-                },
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.textButtonColorsPrimary(),
-                enabled = enable
-            )
+                Box(
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    OutlinedTextField(
+                        value = controlParam,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 6.dp),
+                        onValueChange = {
+                            controlParam = it
+                            enable = controlParam.isNotBlank()
+                        },
+                        shape = RoundedCornerShape(50.0f),
+                        label = { Text(stringResource(id = R.string.kpm_control_paramters)) },
+                        visualTransformation = VisualTransformation.None,
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = { showDialog.value = false }) {
+                        Text(stringResource(id = android.R.string.cancel))
+                    }
+
+                    Button(onClick = {
+                        showDialog.value = false
+                        // Run the control on the caller's scope: this dialog leaves
+                        // composition here, cancelling any scope it owns.
+                        onConfirm(controlParam)
+                    }, enabled = enable) {
+                        Text(stringResource(id = android.R.string.ok))
+                    }
+                }
+            }
         }
+        val dialogWindowProvider = LocalView.current.parent as DialogWindowProvider
+        APDialogBlurBehindUtils.setupWindowBlurListener(dialogWindowProvider.window)
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KPModuleList(
     viewModel: KPModuleViewModel,
     modules: List<KPModel.KPMInfo>,
     modifier: Modifier = Modifier,
     state: LazyListState,
-    scrollBehavior: ScrollBehavior
+    scrollBehavior: SearchBarScrollBehavior
 ) {
     val moduleStr = stringResource(id = R.string.kpm)
     val moduleUninstallConfirm = stringResource(id = R.string.kpm_unload_confirm)
@@ -480,7 +513,7 @@ private fun KPModuleList(
         }
     }
 
-    PullToRefresh(
+    PullToRefreshBox(
         modifier = modifier,
         onRefresh = { viewModel.fetchModuleList() },
         isRefreshing = viewModel.isRefreshing
@@ -563,10 +596,11 @@ private fun KPModuleItem(
     val moduleArgs = stringResource(id = R.string.kpm_args)
     val decoration = TextDecoration.None
 
-    Card(
+    Surface(
         modifier = modifier,
-        cornerRadius = 20.dp,
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceContainer)
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(20.dp)
     ) {
 
         Box(
@@ -587,33 +621,33 @@ private fun KPModuleItem(
                     ) {
                         Text(
                             text = module.name,
-                            style = MiuixTheme.textStyles.subtitle,
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             maxLines = 2,
                             textDecoration = decoration,
                             overflow = TextOverflow.Ellipsis
                         )
 
                         if (module.loadSource == "embedded") {
-                            Text(stringResource(R.string.kpm_embedded), style = MiuixTheme.textStyles.footnote2,
-                                color = MiuixTheme.colorScheme.primary)
+                            Text(stringResource(R.string.kpm_embedded), style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
                         } else if (module.installed) {
                             Text(if (module.disabled) stringResource(R.string.kpm_disabled) else stringResource(R.string.kpm_installed),
-                                style = MiuixTheme.textStyles.footnote2,
-                                color = MiuixTheme.colorScheme.primary)
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary)
                         }
 
                         Text(
                             text = "${module.version}, $moduleAuthor ${module.author}",
-                            style = MiuixTheme.textStyles.footnote1,
+                            style = MaterialTheme.typography.bodySmall,
                             textDecoration = decoration,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
 
                         Text(
                             text = "$moduleArgs: ${module.args}",
-                            style = MiuixTheme.textStyles.footnote1,
+                            style = MaterialTheme.typography.bodySmall,
                             textDecoration = decoration,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
@@ -628,14 +662,14 @@ private fun KPModuleItem(
                         .alpha(alpha = alpha)
                         .padding(horizontal = 16.dp),
                     text = module.description,
-                    style = MiuixTheme.textStyles.footnote1,
+                    style = MaterialTheme.typography.bodySmall,
                     textDecoration = decoration,
-                    color = MiuixTheme.colorScheme.outline
+                    color = MaterialTheme.colorScheme.outline
                 )
 
                 HorizontalDivider(
                     thickness = 1.5.dp,
-                    color = MiuixTheme.colorScheme.dividerLine,
+                    color = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.padding(top = 8.dp)
                 )
 
@@ -647,12 +681,10 @@ private fun KPModuleItem(
                 ) {
                     Spacer(modifier = Modifier.weight(1f))
 
-                    IconButton(
+                    FilledTonalButton(
                         onClick = { onControl(module) },
                         enabled = true,
-                        minHeight = 35.dp,
-                        minWidth = 35.dp,
-                        backgroundColor = MiuixTheme.colorScheme.secondaryContainer
+                        contentPadding = PaddingValues(12.dp)
                     ) {
                         Icon(
                             modifier = Modifier.size(20.dp),

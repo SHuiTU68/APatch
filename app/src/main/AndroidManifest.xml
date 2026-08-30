@@ -13,8 +13,6 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
-    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
-
     <application
         android:name=".APApplication"
         android:allowBackup="true"

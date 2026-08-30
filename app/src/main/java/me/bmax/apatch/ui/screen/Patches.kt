@@ -17,6 +17,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,8 +25,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +39,23 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialogDefaults
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,11 +68,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -69,20 +92,7 @@ import me.bmax.apatch.ui.viewmodel.PatchesViewModel
 import me.bmax.apatch.util.Version
 import me.bmax.apatch.util.isJailbreakMode
 import me.bmax.apatch.util.reboot
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
-import top.yukonga.miuix.kmp.basic.FloatingActionButton
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import me.bmax.apatch.util.ui.APDialogBlurBehindUtils
 
 private const val TAG = "Patches"
 
@@ -103,7 +113,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
             ) {
                 WarningCard(
                     message = stringResource(R.string.jailbreak_no_patch),
-                    containerColor = MiuixTheme.colorScheme.outline,
+                    color = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
         }
@@ -125,7 +135,7 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
     }, floatingActionButton = {
         if (viewModel.needReboot) {
             val reboot = stringResource(id = R.string.reboot)
-            FloatingActionButton(
+            ExtendedFloatingActionButton(
                 onClick = {
                     scope.launch {
                         withContext(Dispatchers.IO) {
@@ -133,17 +143,9 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                         }
                     }
                 },
-                containerColor = MiuixTheme.colorScheme.primary
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                ) {
-                    Icon(Icons.Filled.Refresh, reboot)
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = reboot, color = MiuixTheme.colorScheme.onPrimary)
-                }
-            }
+                icon = { Icon(Icons.Filled.Refresh, reboot) },
+                text = { Text(text = reboot) },
+            )
         }
     }) { innerPadding ->
         Column(
@@ -209,11 +211,12 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
             }
 
             if (mode != PatchesViewModel.PatchMode.UNPATCH && viewModel.kimgInfo.banner.isNotEmpty()) {
-                Card(
+                ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.defaultColors(
-                        color = MiuixTheme.colorScheme.secondaryContainer
-                    )
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ),
+                    elevation = CardDefaults.elevatedCardElevation(defaultElevation = 2.dp)
                 ) {
                     SwitchItem(
                         icon = Icons.Default.Key,
@@ -292,9 +295,9 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                     Text(
                         modifier = Modifier.padding(8.dp),
                         text = viewModel.patchLog,
-                        fontSize = MiuixTheme.textStyles.body2.fontSize,
-                        fontFamily = MiuixTheme.textStyles.body2.fontFamily,
-                        lineHeight = MiuixTheme.textStyles.body2.lineHeight,
+                        fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                        fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
+                        lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
                     )
                 }
                 LaunchedEffect(viewModel.patchLog) {
@@ -340,49 +343,70 @@ private fun StartButton(text: String, onClick: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ExtraConfigDialog(kpmInfo: KPModel.KPMInfo, onDismiss: () -> Unit) {
     var event by remember { mutableStateOf(kpmInfo.event) }
     var args by remember { mutableStateOf(kpmInfo.args) }
 
-    WindowDialog(
-        show = true,
-        title = stringResource(id = R.string.kpm_control_dialog_title),
-        onDismissRequest = onDismiss
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            decorFitsSystemWindows = true,
+            usePlatformDefaultWidth = false,
+        )
     ) {
-        TextField(
-            value = event,
-            onValueChange = {
-                event = it
-                kpmInfo.event = it
-            },
-            label = stringResource(id = R.string.patch_item_extra_event),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        TextField(
-            value = args,
-            onValueChange = {
-                args = it
-                kpmInfo.args = it
-            },
-            label = stringResource(id = R.string.patch_item_extra_args),
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End
+        Surface(
+            modifier = Modifier
+                .width(310.dp)
+                .wrapContentHeight(),
+            shape = RoundedCornerShape(30.dp),
+            tonalElevation = AlertDialogDefaults.TonalElevation,
+            color = AlertDialogDefaults.containerColor,
         ) {
-            TextButton(
-                text = stringResource(id = android.R.string.ok),
-                onClick = onDismiss
-            )
+            Column(modifier = Modifier.padding(PaddingValues(all = 24.dp))) {
+                Text(
+                    text = stringResource(id = R.string.kpm_control_dialog_title),
+                    style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.padding(bottom = 16.dp)
+                )
+
+                OutlinedTextField(
+                    value = event,
+                    onValueChange = {
+                        event = it
+                        kpmInfo.event = it
+                    },
+                    label = { Text(stringResource(id = R.string.patch_item_extra_event)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = args,
+                    onValueChange = {
+                        args = it
+                        kpmInfo.args = it
+                    },
+                    label = { Text(stringResource(id = R.string.patch_item_extra_args)) },
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(stringResource(id = android.R.string.ok))
+                    }
+                }
+            }
         }
+        val dialogWindowProvider = LocalView.current.parent as DialogWindowProvider
+        APDialogBlurBehindUtils.setupWindowBlurListener(dialogWindowProvider.window)
     }
 }
 
@@ -394,8 +418,10 @@ private fun ExtraItem(extra: KPModel.IExtraInfo, existed: Boolean, onDelete: () 
         ExtraConfigDialog(extra, onDismiss = { showConfigDialog = false })
     }
 
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 1f)
+        }),
     ) {
         Column(
             modifier = Modifier
@@ -409,55 +435,48 @@ private fun ExtraItem(extra: KPModel.IExtraInfo, existed: Boolean, onDelete: () 
                             if (existed) R.string.patch_item_existed_extra_kpm else R.string.patch_item_new_extra_kpm
                     ) +
                             " " + extra.type.toString().uppercase(),
-                    style = MiuixTheme.textStyles.body1,
+                    style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier
                         .weight(1f)
                         .wrapContentWidth(Alignment.CenterHorizontally)
                 )
                 if (extra.type == KPModel.ExtraType.KPM) {
-                    IconButton(
-                        onClick = { showConfigDialog = true },
-                        minHeight = 32.dp,
-                        minWidth = 32.dp
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Config"
-                        )
-                    }
-                }
-                IconButton(
-                    onClick = onDelete,
-                    minHeight = 32.dp,
-                    minWidth = 32.dp
-                ) {
                     Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete"
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Config",
+                        modifier = Modifier
+                            .padding(end = 8.dp)
+                            .clickable { showConfigDialog = true }
                     )
                 }
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .clickable { onDelete() })
             }
             if (extra.type == KPModel.ExtraType.KPM) {
                 val kpmInfo: KPModel.KPMInfo = extra as KPModel.KPMInfo
                 Text(
                     text = "${stringResource(id = R.string.patch_item_extra_name) + " "} ${kpmInfo.name}",
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "${stringResource(id = R.string.patch_item_extra_version) + " "} ${kpmInfo.version}",
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "${stringResource(id = R.string.patch_item_extra_kpm_license) + " "} ${kpmInfo.license}",
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "${stringResource(id = R.string.patch_item_extra_author) + " "} ${kpmInfo.author}",
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
                     text = "${stringResource(id = R.string.patch_item_extra_kpm_desciption) + " "} ${kpmInfo.description}",
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
         }
@@ -470,8 +489,10 @@ private fun SetSuperKeyView(viewModel: PatchesViewModel) {
     var skey by remember { mutableStateOf(viewModel.superkey) }
     var showWarn by remember { mutableStateOf(!viewModel.checkSuperKeyValidation(skey)) }
     var keyVisible by remember { mutableStateOf(false) }
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
     ) {
         Column(
             modifier = Modifier
@@ -485,7 +506,7 @@ private fun SetSuperKeyView(viewModel: PatchesViewModel) {
             ) {
                 Text(
                     text = stringResource(id = R.string.patch_item_skey),
-                    style = MiuixTheme.textStyles.body1
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
             if (showWarn) {
@@ -493,18 +514,22 @@ private fun SetSuperKeyView(viewModel: PatchesViewModel) {
                 Text(
                     color = Color.Red,
                     text = stringResource(id = R.string.patch_item_set_skey_label),
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
             Column {
                 Box(
                     contentAlignment = Alignment.CenterEnd,
                 ) {
-                    TextField(
+                    OutlinedTextField(
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(top = 6.dp),
                         value = skey,
+                        label = { Text(stringResource(id = R.string.patch_set_superkey)) },
+                        visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        shape = RoundedCornerShape(50.0f),
                         onValueChange = {
                             skey = it
                             if (viewModel.checkSuperKeyValidation(it)) {
@@ -515,10 +540,6 @@ private fun SetSuperKeyView(viewModel: PatchesViewModel) {
                                 showWarn = true
                             }
                         },
-                        label = stringResource(id = R.string.patch_set_superkey),
-                        visualTransformation = if (keyVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
                     )
                     IconButton(
                         modifier = Modifier
@@ -541,13 +562,15 @@ private fun SetSuperKeyView(viewModel: PatchesViewModel) {
 @Composable
 private fun KernelPatchImageView(kpImgInfo: KPModel.KPImgInfo) {
     if (kpImgInfo.version.isEmpty()) return
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp),
         ) {
             Column(
                 modifier = Modifier
@@ -556,21 +579,21 @@ private fun KernelPatchImageView(kpImgInfo: KPModel.KPImgInfo) {
             ) {
                 Text(
                     text = stringResource(id = R.string.patch_item_kpimg),
-                    style = MiuixTheme.textStyles.body1
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
             Text(
                 text = stringResource(id = R.string.patch_item_kpimg_version) + " " + Version.uInt2String(
                     kpImgInfo.version.substring(2).toUInt(16)
-                ), style = MiuixTheme.textStyles.body2
+                ), style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 text = stringResource(id = R.string.patch_item_kpimg_comile_time) + " " + kpImgInfo.compileTime,
-                style = MiuixTheme.textStyles.body2
+                style = MaterialTheme.typography.bodyMedium
             )
             Text(
                 text = stringResource(id = R.string.patch_item_kpimg_config) + " " + kpImgInfo.config,
-                style = MiuixTheme.textStyles.body2
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }
@@ -578,8 +601,10 @@ private fun KernelPatchImageView(kpImgInfo: KPModel.KPImgInfo) {
 
 @Composable
 private fun BootimgView(slot: String, boot: String) {
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
     ) {
         Column(
             modifier = Modifier
@@ -593,18 +618,18 @@ private fun BootimgView(slot: String, boot: String) {
             ) {
                 Text(
                     text = stringResource(id = R.string.patch_item_bootimg),
-                    style = MiuixTheme.textStyles.body1
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
             if (slot.isNotEmpty()) {
                 Text(
                     text = stringResource(id = R.string.patch_item_bootimg_slot) + " " + slot,
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
             Text(
                 text = stringResource(id = R.string.patch_item_bootimg_dev) + " " + boot,
-                style = MiuixTheme.textStyles.body2
+                style = MaterialTheme.typography.bodyMedium
             )
         }
     }
@@ -612,8 +637,10 @@ private fun BootimgView(slot: String, boot: String) {
 
 @Composable
 private fun KernelImageView(kImgInfo: KPModel.KImgInfo) {
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
     ) {
         Column(
             modifier = Modifier
@@ -627,10 +654,10 @@ private fun KernelImageView(kImgInfo: KPModel.KImgInfo) {
             ) {
                 Text(
                     text = stringResource(id = R.string.patch_item_kernel),
-                    style = MiuixTheme.textStyles.body1
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
-            Text(text = kImgInfo.banner, style = MiuixTheme.textStyles.body2)
+            Text(text = kImgInfo.banner, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
@@ -668,28 +695,32 @@ private fun SelectFileButton(text: String, onSelected: (data: Intent, uri: Uri) 
 @Composable
 private fun ErrorView(error: String) {
     if (error.isEmpty()) return
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.error)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.error
+        })
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
+                .padding(start = 12.dp, top = 12.dp, end = 12.dp, bottom = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
                 text = stringResource(id = R.string.patch_item_error),
-                style = MiuixTheme.textStyles.body1
+                style = MaterialTheme.typography.bodyLarge
             )
-            Text(text = error, style = MiuixTheme.textStyles.body2)
+            Text(text = error, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
 
 @Composable
 private fun PatchMode(mode: PatchesViewModel.PatchMode) {
-    Card(
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.secondaryContainer)
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
     ) {
         Column(
             modifier = Modifier
@@ -697,12 +728,13 @@ private fun PatchMode(mode: PatchesViewModel.PatchMode) {
                 .padding(12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text(text = stringResource(id = mode.sId), style = MiuixTheme.textStyles.body1)
+            Text(text = stringResource(id = mode.sId), style = MaterialTheme.typography.bodyLarge)
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar() {
-    TopAppBar(title = stringResource(R.string.patch_config_title))
+    TopAppBar(title = { Text(stringResource(R.string.patch_config_title)) })
 }

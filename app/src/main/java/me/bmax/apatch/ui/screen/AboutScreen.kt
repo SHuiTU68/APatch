@@ -12,9 +12,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,16 +43,6 @@ import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import me.bmax.apatch.BuildConfig
 import me.bmax.apatch.R
 import me.bmax.apatch.util.Version
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Surface
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Destination<RootGraph>
 @Composable
@@ -75,15 +77,15 @@ fun AboutScreen(navigator: DestinationsNavigator) {
             Spacer(modifier = Modifier.height(20.dp))
             Text(
                 text = stringResource(id = R.string.app_name),
-                style = MiuixTheme.textStyles.title1
+                style = MaterialTheme.typography.titleLarge
             )
             Text(
                 text = stringResource(
                     id = R.string.about_app_version,
                     if (BuildConfig.VERSION_NAME.contains(BuildConfig.VERSION_CODE.toString())) "${BuildConfig.VERSION_CODE}" else "${BuildConfig.VERSION_CODE} (${BuildConfig.VERSION_NAME})"
                 ),
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 5.dp)
             )
             Text(
@@ -92,8 +94,8 @@ fun AboutScreen(navigator: DestinationsNavigator) {
                     id = R.string.about_powered_by,
                     "KernelPatch (${Version.buildKPVString()})"
                 ),
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 5.dp)
             )
 
@@ -104,25 +106,25 @@ fun AboutScreen(navigator: DestinationsNavigator) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(
+                FilledTonalButton(
                     onClick = { uriHandler.openUri("https://github.com/bmax121/APatch") }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.github),
                         contentDescription = null
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                     Text(text = stringResource(id = R.string.about_github))
                 }
 
-                Button(
+                FilledTonalButton(
                     onClick = { uriHandler.openUri("https://t.me/APatchChannel") }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.telegram),
                         contentDescription = null
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                     Text(text = stringResource(id = R.string.about_telegram_channel))
                 }
             }
@@ -132,34 +134,33 @@ fun AboutScreen(navigator: DestinationsNavigator) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Button(
+                FilledTonalButton(
                     onClick = { uriHandler.openUri("https://hosted.weblate.org/engage/APatch") }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.weblate),
                         contentDescription = null,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(ButtonDefaults.IconSize)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                     Text(text = stringResource(id = R.string.about_weblate))
                 }
 
-                Button(
+                FilledTonalButton(
                     onClick = { uriHandler.openUri("https://t.me/apatch_discuss") }
                 ) {
                     Icon(
                         painter = painterResource(id = R.drawable.telegram),
                         contentDescription = null
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(ButtonDefaults.IconSpacing))
                     Text(text = stringResource(id = R.string.about_telegram_group))
                 }
             }
 
-            Card(
+            OutlinedCard(
                 modifier = Modifier.padding(vertical = 30.dp, horizontal = 20.dp),
-                cornerRadius = 15.dp,
-                colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceContainer)
+                shape = RoundedCornerShape(15.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -168,8 +169,8 @@ fun AboutScreen(navigator: DestinationsNavigator) {
                 ) {
                     Text(
                         text = stringResource(id = R.string.about_app_desc),
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -178,10 +179,11 @@ fun AboutScreen(navigator: DestinationsNavigator) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(onBack: () -> Unit = {}) {
     TopAppBar(
-        title = stringResource(R.string.about),
+        title = { Text(stringResource(R.string.about)) },
         navigationIcon = {
             IconButton(
                 onClick = onBack

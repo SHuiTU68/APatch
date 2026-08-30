@@ -32,23 +32,22 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.FloatingActionButton
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.PullToRefresh
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.ScrollBehavior
-import top.yukonga.miuix.kmp.basic.Surface
-import top.yukonga.miuix.kmp.basic.Switch
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.SnackbarDuration
-import top.yukonga.miuix.kmp.basic.SnackbarHost
-import top.yukonga.miuix.kmp.basic.SnackbarHostState
-import top.yukonga.miuix.kmp.basic.SnackbarResult
-import top.yukonga.miuix.kmp.theme.MiuixTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SearchBarScrollBehavior
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -112,6 +111,7 @@ import me.bmax.apatch.util.undoRemoveModule
 import me.bmax.apatch.util.uninstallModule
 import okhttp3.Request
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Destination<RootGraph>
 @Composable
 fun APModuleScreen(navigator: DestinationsNavigator) {
@@ -130,7 +130,7 @@ fun APModuleScreen(navigator: DestinationsNavigator) {
             Row {
                 Text(
                     text = stringResource(id = R.string.apm_not_installed),
-                    style = MiuixTheme.textStyles.headline2
+                    style = MaterialTheme.typography.titleMedium
                 )
             }
         }
@@ -181,7 +181,8 @@ fun APModuleScreen(navigator: DestinationsNavigator) {
             }
 
             FloatingActionButton(
-                containerColor = MiuixTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                containerColor = MaterialTheme.colorScheme.primary,
                 onClick = {
                     // select the zip file to install
                     val intent = Intent(Intent.ACTION_GET_CONTENT)
@@ -190,8 +191,7 @@ fun APModuleScreen(navigator: DestinationsNavigator) {
                 }) {
                 Icon(
                     painter = painterResource(id = R.drawable.package_import),
-                    contentDescription = null,
-                    tint = MiuixTheme.colorScheme.onPrimary
+                    contentDescription = null
                 )
             }
         },
@@ -271,6 +271,7 @@ private fun getMetaModuleWarningText(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MetaModuleWarningCard(
     text: String
@@ -291,6 +292,7 @@ private fun MetaModuleWarningCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ModuleList(
     navigator: DestinationsNavigator,
@@ -301,7 +303,7 @@ private fun ModuleList(
     onInstallModule: (Uri) -> Unit,
     onClickModule: (id: String, name: String, hasWebUi: Boolean) -> Unit,
     snackBarHost: SnackbarHostState,
-    scrollBehavior: ScrollBehavior
+    scrollBehavior: SearchBarScrollBehavior
 ) {
     val failedEnable = stringResource(R.string.apm_failed_to_enable)
     val failedDisable = stringResource(R.string.apm_failed_to_disable)
@@ -449,7 +451,7 @@ private fun ModuleList(
         }
     }
 
-    PullToRefresh(
+    PullToRefreshBox(
         modifier = modifier,
         onRefresh = { viewModel.fetchModuleList() },
         isRefreshing = viewModel.isRefreshing
@@ -582,10 +584,11 @@ private fun ModuleItem(
     val decoration = if (!module.remove) TextDecoration.None else TextDecoration.LineThrough
     val moduleAuthor = stringResource(id = R.string.apm_author)
     val viewModel = viewModel<APModuleViewModel>()
-    Card(
+    Surface(
         modifier = modifier,
-        cornerRadius = 20.dp,
-        colors = CardDefaults.defaultColors(color = MiuixTheme.colorScheme.surfaceContainer)
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(20.dp)
     ) {
 
         Box(
@@ -614,15 +617,15 @@ private fun ModuleItem(
                                 subcompose("meta") {
                                     Surface(
                                         shape = RoundedCornerShape(4.dp),
-                                        color = MiuixTheme.colorScheme.tertiaryContainer
+                                        color = MaterialTheme.colorScheme.tertiary
                                     ) {
                                         Text(
                                             text = "META",
-                                            style = MiuixTheme.textStyles.footnote1.copy(
+                                            style = MaterialTheme.typography.labelSmall.copy(
                                                 fontSize = 10.sp
                                             ),
                                             modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                            color = MiuixTheme.colorScheme.onTertiaryContainer,
+                                            color = MaterialTheme.colorScheme.onTertiary,
                                             maxLines = 1,
                                             overflow = TextOverflow.Ellipsis
                                         )
@@ -635,7 +638,7 @@ private fun ModuleItem(
                             val namePlaceable = subcompose("name") {
                                 Text(
                                     text = module.name,
-                                    style = MiuixTheme.textStyles.subtitle.copy(fontWeight = FontWeight.Bold),
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                                     maxLines = 2,
                                     textDecoration = decoration,
                                     overflow = TextOverflow.Ellipsis,
@@ -658,9 +661,9 @@ private fun ModuleItem(
 
                         Text(
                             text = "${module.version}, $moduleAuthor ${module.author}",
-                            style = MiuixTheme.textStyles.footnote1,
+                            style = MaterialTheme.typography.bodySmall,
                             textDecoration = decoration,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
 
@@ -676,14 +679,14 @@ private fun ModuleItem(
                         .alpha(alpha = alpha)
                         .padding(horizontal = 16.dp),
                     text = module.description,
-                    style = MiuixTheme.textStyles.footnote1,
+                    style = MaterialTheme.typography.bodySmall,
                     textDecoration = decoration,
-                    color = MiuixTheme.colorScheme.outline
+                    color = MaterialTheme.colorScheme.outline
                 )
 
                 HorizontalDivider(
                     thickness = 1.5.dp,
-                    color = MiuixTheme.colorScheme.dividerLine,
+                    color = MaterialTheme.colorScheme.surface,
                     modifier = Modifier.padding(top = 8.dp)
                 )
 
@@ -700,12 +703,10 @@ private fun ModuleItem(
                     }
 
                     if (module.hasWebUi) {
-                        IconButton(
+                        FilledTonalButton(
                             onClick = { onClick(module) },
                             enabled = true,
-                            minHeight = 35.dp,
-                            minWidth = 35.dp,
-                            backgroundColor = MiuixTheme.colorScheme.secondaryContainer
+                            contentPadding = PaddingValues(12.dp)
                         ) {
                             Icon(
                                 modifier = Modifier.size(20.dp),
@@ -718,15 +719,11 @@ private fun ModuleItem(
                     }
 
                     if (module.hasActionScript) {
-                        IconButton(
+                        FilledTonalButton(
                             onClick = {
                                 navigator.navigate(ExecuteAPMActionScreenDestination(module.id))
                                 viewModel.markNeedRefresh()
-                            },
-                            enabled = true,
-                            minHeight = 35.dp,
-                            minWidth = 35.dp,
-                            backgroundColor = MiuixTheme.colorScheme.secondaryContainer
+                            }, enabled = true, contentPadding = PaddingValues(12.dp)
                         ) {
                             Icon(
                                 modifier = Modifier.size(20.dp),

@@ -14,6 +14,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -38,13 +46,6 @@ import me.bmax.apatch.ui.viewmodel.PatchesViewModel
 import me.bmax.apatch.util.isABDevice
 import me.bmax.apatch.util.isJailbreakMode
 import me.bmax.apatch.util.rootAvailable
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.RadioButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 // Hand-off channel from this screen to the Patches screen; a plain var would not
 // notify the LaunchedEffect consuming it there.
@@ -167,7 +168,7 @@ private fun SelectInstallMethod(
             Box(Modifier.padding(12.dp)) {
                 WarningCard(
                     message = stringResource(R.string.jailbreak_no_patch),
-                    containerColor = MiuixTheme.colorScheme.dividerLine,
+                    color = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
         }
@@ -175,7 +176,7 @@ private fun SelectInstallMethod(
             Box(Modifier.padding(12.dp)) {
                 WarningCard(
                     message = stringResource(R.string.home_install_unknown_summary),
-                    containerColor = MiuixTheme.colorScheme.dividerLine,
+                    color = MaterialTheme.colorScheme.outlineVariant,
                 )
             }
         }
@@ -194,13 +195,16 @@ private fun SelectInstallMethod(
                 Column {
                     Text(
                         text = stringResource(id = option.label),
-                        style = MiuixTheme.textStyles.title2
+                        fontSize = MaterialTheme.typography.titleMedium.fontSize,
+                        fontFamily = MaterialTheme.typography.titleMedium.fontFamily,
+                        fontStyle = MaterialTheme.typography.titleMedium.fontStyle
                     )
                     option.summary?.let {
                         Text(
                             text = it,
-                            style = MiuixTheme.textStyles.footnote1,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            fontSize = MaterialTheme.typography.bodySmall.fontSize,
+                            fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
+                            fontStyle = MaterialTheme.typography.bodySmall.fontStyle
                         )
                     }
                 }
@@ -210,10 +214,11 @@ private fun SelectInstallMethod(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(onBack: () -> Unit = {}) {
     TopAppBar(
-        title = stringResource(R.string.mode_select_page_title),
+        title = { Text(stringResource(R.string.mode_select_page_title)) },
         navigationIcon = {
             IconButton(
                 onClick = onBack

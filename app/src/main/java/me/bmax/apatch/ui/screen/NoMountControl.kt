@@ -29,10 +29,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.SystemUpdateAlt
@@ -68,28 +66,29 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.bmax.apatch.R
 import me.bmax.apatch.apApp
-import me.bmax.apatch.ui.component.ArrowItem
-import me.bmax.apatch.ui.component.DropdownItem
 import me.bmax.apatch.ui.component.SwitchItem
-import me.bmax.apatch.ui.component.pinnedScrollBehavior
 import me.bmax.apatch.util.rootShellForResult
 import me.bmax.apatch.util.ui.LocalSnackbarHost
 import org.json.JSONArray
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.FloatingActionButton
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SnackbarHost
-import top.yukonga.miuix.kmp.basic.TabRow
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TopAppBar
+import androidx.compose.ui.window.Dialog
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
 import java.util.zip.GZIPOutputStream
@@ -138,6 +137,7 @@ private data class PickableApp(
 
 @Destination<RootGraph>
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun NoMountControlScreen(navigator: DestinationsNavigator) {
     val context = LocalContext.current
     val snackBarHost = LocalSnackbarHost.current
@@ -202,7 +202,7 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = stringResource(R.string.nomount_control),
+                title = { Text(stringResource(R.string.nomount_control)) },
                 navigationIcon = {
                     IconButton(onClick = { navigator.navigateUp() }) {
                         Icon(
@@ -211,7 +211,6 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
                         )
                     }
                 },
-                scrollBehavior = pinnedScrollBehavior()
             )
         },
         snackbarHost = { SnackbarHost(snackBarHost) },
@@ -234,13 +233,19 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
                 .padding(paddingValues)
         ) {
             TabRow(
-                tabs = tabs,
                 selectedTabIndex = selectedTab,
-                onTabSelected = { selectedTab = it },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 4.dp)
-            )
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    Tab(
+                        selected = selectedTab == index,
+                        onClick = { selectedTab = index },
+                        text = { Text(title) }
+                    )
+                }
+            }
 
             when (selectedTab) {
                 0 -> HomeTab(homeInfo, homeLoading, onRefresh = {
@@ -357,7 +362,7 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                     Icon(
                         imageVector = if (info.active) Icons.Filled.CheckCircle else Icons.Filled.ErrorOutline,
                         contentDescription = null,
-                        tint = if (info.active) MiuixTheme.colorScheme.primary else MiuixTheme.colorScheme.error,
+                        tint = if (info.active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                         modifier = Modifier.size(40.dp)
                     )
                     Spacer(Modifier.width(12.dp))
@@ -368,13 +373,13 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                                 info.active -> stringResource(R.string.nomount_status_active)
                                 else -> stringResource(R.string.nomount_status_inactive)
                             },
-                            style = MiuixTheme.textStyles.title2,
+                            style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
                             text = info.versionFull.ifBlank { unknown },
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     if (info.nmMode.isNotEmpty()) {
@@ -384,8 +389,8 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                             } else {
                                 stringResource(R.string.nomount_mode_builtin)
                             },
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -402,14 +407,14 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                     Icon(
                         imageVector = Icons.Filled.Extension,
                         contentDescription = null,
-                        tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
                     Spacer(Modifier.width(12.dp))
                     Text(
                         text = stringResource(R.string.nomount_status_label),
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.weight(1f)
                     )
                     Text(
@@ -421,7 +426,7 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                         } else {
                             stringResource(R.string.nomount_status_inactive)
                         },
-                        style = MiuixTheme.textStyles.body2,
+                        style = MaterialTheme.typography.bodyMedium,
                         fontWeight = FontWeight.Medium
                     )
                 }
@@ -429,8 +434,8 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
             Spacer(Modifier.height(16.dp))
             Text(
                 text = stringResource(R.string.nomount_device_label),
-                style = MiuixTheme.textStyles.body2,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 8.dp, bottom = 8.dp)
             )
             Card {
@@ -455,19 +460,19 @@ private fun InfoRow(icon: ImageVector, label: String, value: String) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = label,
-            style = MiuixTheme.textStyles.body2,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.weight(1f)
         )
         Text(
             text = value,
-            style = MiuixTheme.textStyles.body2,
+            style = MaterialTheme.typography.bodyMedium,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
@@ -506,7 +511,7 @@ private fun ModulesTab(
                 ) {
                     Text(
                         text = stringResource(R.string.nomount_no_modules_found),
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -549,15 +554,15 @@ private fun ModuleCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = module.name,
-                        style = MiuixTheme.textStyles.title3,
+                        style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(2.dp))
                     Text(
                         text = "${stringResource(R.string.nomount_status_label)}: $statusText",
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -566,12 +571,12 @@ private fun ModuleCard(
                             R.string.nomount_modules_injected_files,
                             module.injectedFiles
                         ),
-                        style = MiuixTheme.textStyles.body2,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Spacer(Modifier.width(8.dp))
-                top.yukonga.miuix.kmp.basic.Switch(
+                Switch(
                     checked = !module.disabled,
                     onCheckedChange = onToggle
                 )
@@ -587,11 +592,11 @@ private fun ModuleCard(
                     onClick = onHotAction,
                     colors = if (isLoaded) {
                         ButtonDefaults.buttonColors(
-                            color = MiuixTheme.colorScheme.secondaryContainer,
-                            contentColor = MiuixTheme.colorScheme.onSurface
+                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onSurface
                         )
                     } else {
-                        ButtonDefaults.buttonColorsPrimary()
+                        ButtonDefaults.buttonColors()
                     },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                     content = {
@@ -640,7 +645,7 @@ private fun ExclusionsTab(
                 ) {
                     Text(
                         text = stringResource(R.string.nomount_no_exclusions_yet),
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -666,14 +671,14 @@ private fun ExclusionsTab(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
                                 text = entry.label,
-                                style = MiuixTheme.textStyles.title3,
+                                style = MaterialTheme.typography.titleMedium,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
                             Text(
                                 text = entry.pkg,
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis
                             )
@@ -682,7 +687,7 @@ private fun ExclusionsTab(
                             Icon(
                                 imageVector = Icons.Filled.Delete,
                                 contentDescription = stringResource(R.string.nomount_remove_exclusion),
-                                tint = MiuixTheme.colorScheme.error
+                                tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
@@ -725,17 +730,16 @@ private fun OptionsTab(
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = stringResource(R.string.nomount_clear_rules),
-                            style = MiuixTheme.textStyles.title3
+                            style = MaterialTheme.typography.titleMedium
                         )
                         Text(
                             text = stringResource(R.string.settings_nomount_summary),
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                     Button(
                         onClick = onClearRules,
-                        colors = ButtonDefaults.buttonColorsPrimary(),
                         content = {
                             Text(text = stringResource(R.string.nomount_clear_rules))
                         }
@@ -798,22 +802,32 @@ private fun AppPickerDialog(
         if (showManualUid) showManualUid = false else onDismiss()
     }
 
-    WindowDialog(
-        show = true,
-        title = stringResource(R.string.nomount_select_application),
+    Dialog(
         onDismissRequest = { if (showManualUid) showManualUid = false else onDismiss() }
     ) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth().padding(16.dp)
+        ) {
+            Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                Text(
+                    text = stringResource(R.string.nomount_select_application),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
         if (showManualUid) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 Text(
                     text = stringResource(R.string.nomount_enter_manual_uid),
-                    style = MiuixTheme.textStyles.body2
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 Spacer(Modifier.height(12.dp))
                 TextField(
                     value = manualUid,
                     onValueChange = { manualUid = it.filter { c -> c.isDigit() } },
-                    label = stringResource(R.string.nomount_manual_uid_hint),
+                    label = { Text(stringResource(R.string.nomount_manual_uid_hint)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -829,17 +843,14 @@ private fun AppPickerDialog(
                                 onAdd(listOf(NoMountExclusion(uid, "UID: $uid", "System/Manual")))
                             }
                         },
-                        colors = ButtonDefaults.buttonColorsPrimary(),
                         content = {
                             Text(text = stringResource(android.R.string.ok))
                         }
                     )
                 }
             }
-            return@WindowDialog
-        }
-
-        Row(
+        } else {
+            Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(bottom = 8.dp),
@@ -850,7 +861,7 @@ private fun AppPickerDialog(
                 onValueChange = { search = it },
                 modifier = Modifier.weight(1f),
                 singleLine = true,
-                textStyle = MiuixTheme.textStyles.body1
+                textStyle = MaterialTheme.typography.bodyLarge
             )
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = { showSystem = !showSystem }) {
@@ -887,17 +898,17 @@ private fun AppPickerDialog(
                         )
                         Spacer(Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(text = app.label, style = MiuixTheme.textStyles.title3)
+                            Text(text = app.label, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 text = app.packageInfo.packageName,
-                                style = MiuixTheme.textStyles.body2,
-                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                         Text(
                             text = "UID: ${app.uid}",
-                            style = MiuixTheme.textStyles.body2,
-                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         if (!isExisting) {
                             Button(
@@ -912,7 +923,6 @@ private fun AppPickerDialog(
                                         )
                                     )
                                 },
-                                colors = ButtonDefaults.buttonColorsPrimary(),
                                 content = {
                                     Text(text = stringResource(R.string.nomount_add_exclusion))
                                 }
@@ -923,6 +933,9 @@ private fun AppPickerDialog(
                         HorizontalDivider()
                     }
                 }
+            }
+        }
+        }
             }
         }
     }

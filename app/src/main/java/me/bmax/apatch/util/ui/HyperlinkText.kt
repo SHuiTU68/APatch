@@ -1,6 +1,8 @@
 package me.bmax.apatch.util.ui
 
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -11,8 +13,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 import java.util.regex.Pattern
 
 @Composable
@@ -30,7 +30,7 @@ fun LinkifyText(
         linksList.forEach {
             addStyle(
                 style = SpanStyle(
-                    color = MiuixTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.primary,
                     textDecoration = TextDecoration.Underline
                 ),
                 start = it.start,

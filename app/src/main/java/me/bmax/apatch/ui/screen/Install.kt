@@ -7,19 +7,28 @@ import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,7 +37,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -53,17 +61,6 @@ import me.bmax.apatch.util.hasMetaModule
 import me.bmax.apatch.util.installModule
 import me.bmax.apatch.util.reboot
 import me.bmax.apatch.util.ui.LocalSnackbarHost
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
-import top.yukonga.miuix.kmp.basic.FloatingActionButton
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.IconButton
-import top.yukonga.miuix.kmp.basic.Scaffold
-import top.yukonga.miuix.kmp.basic.SnackbarHost
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TopAppBar
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -90,38 +87,34 @@ fun InstallScreen(navigator: DestinationsNavigator, uri: Uri, type: MODULE_TYPE)
     }
     val metaModuleAlertDialog = rememberCustomDialog { dismiss: () -> Unit ->
         val uriHandler = LocalUriHandler.current
-        WindowDialog(
-            show = true,
-            title = stringResource(R.string.warning_of_meta_module_title),
+        AlertDialog(
             onDismissRequest = { dismiss() },
-            content = {
-                Text(
-                    text = stringResource(R.string.warning_of_meta_module_summary),
-                    style = MiuixTheme.textStyles.body2,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                    modifier = Modifier.padding(bottom = 24.dp)
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically
+            icon = {
+                Icon(Icons.Outlined.Info, contentDescription = null)
+            },
+            title = {
+                Row(modifier = Modifier
+                    .fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Button(
-                        onClick = {
-                            uriHandler.openUri("https://apatch.dev/meta-module.html")
-                        }
-                    ) {
-                        Text(text = stringResource(id = R.string.learn_more))
-                    }
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Button(
-                        onClick = { dismiss() },
-                        colors = ButtonDefaults.buttonColorsPrimary()
-                    ) {
-                        Text(text = stringResource(id = android.R.string.ok))
-                    }
+                    Text(text = stringResource(R.string.warning_of_meta_module_title))
                 }
-            }
+            },
+            text = {
+                Text(text = stringResource(R.string.warning_of_meta_module_summary))
+            },
+            confirmButton = {
+                FilledTonalButton(onClick = { dismiss() }) {
+                    Text(text = stringResource(id = android.R.string.ok))
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    uriHandler.openUri("https://apatch.dev/meta-module.html")
+                }) {
+                    Text(text = stringResource(id = R.string.learn_more))
+                }
+            },
         )
     }
 
@@ -186,7 +179,7 @@ fun InstallScreen(navigator: DestinationsNavigator, uri: Uri, type: MODULE_TYPE)
     }, floatingActionButton = {
         if (showFloatAction) {
             val reboot = stringResource(id = R.string.reboot)
-            FloatingActionButton(
+            ExtendedFloatingActionButton(
                 onClick = {
                     scope.launch {
                         withContext(Dispatchers.IO) {
@@ -194,25 +187,9 @@ fun InstallScreen(navigator: DestinationsNavigator, uri: Uri, type: MODULE_TYPE)
                         }
                     }
                 },
-                shape = RoundedCornerShape(24.dp),
-                containerColor = MiuixTheme.colorScheme.primary
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                ) {
-                    Icon(
-                        Icons.Filled.Refresh,
-                        reboot,
-                        tint = MiuixTheme.colorScheme.onPrimary
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = reboot,
-                        color = MiuixTheme.colorScheme.onPrimary
-                    )
-                }
-            }
+                icon = { Icon(Icons.Filled.Refresh, reboot) },
+                text = { Text(text = reboot) },
+            )
         }
 
     }, snackbarHost = { SnackbarHost(snackBarHost) }) { innerPadding ->
@@ -231,9 +208,9 @@ fun InstallScreen(navigator: DestinationsNavigator, uri: Uri, type: MODULE_TYPE)
             Text(
                 modifier = Modifier.padding(8.dp),
                 text = text,
-                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                fontSize = MaterialTheme.typography.bodySmall.fontSize,
                 fontFamily = FontFamily.Monospace,
-                lineHeight = MiuixTheme.textStyles.footnote1.lineHeight,
+                lineHeight = MaterialTheme.typography.bodySmall.lineHeight,
             )
         }
     }
@@ -287,9 +264,10 @@ suspend fun getModuleIdFromUri(context: Context, uri: Uri): String? {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TopBar(onBack: () -> Unit = {}, onSave: () -> Unit = {}) {
-    TopAppBar(title = stringResource(R.string.apm_install), navigationIcon = {
+    TopAppBar(title = { Text(stringResource(R.string.apm_install)) }, navigationIcon = {
         IconButton(
             onClick = onBack
         ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null) }

@@ -14,6 +14,11 @@ import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -21,27 +26,25 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.CardDefaults
-import top.yukonga.miuix.kmp.basic.Icon
-import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 @Composable
 fun WarningCard(
     message: String,
-    containerColor: Color = MiuixTheme.colorScheme.error,
-    contentColor: Color = MiuixTheme.colorScheme.onError,
+    color: Color? = null,
     onClick: (() -> Unit)? = null,
     onClose: (() -> Unit)? = null,
     icon: (@Composable () -> Unit)? = null
 ) {
-    val cardColors = CardDefaults.defaultColors(
-        color = containerColor,
-        contentColor = contentColor
+    val cardColors = CardDefaults.cardColors(
+        containerColor = color ?: MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        disabledContainerColor = MaterialTheme.colorScheme.errorContainer,
+        disabledContentColor = MaterialTheme.colorScheme.onErrorContainer
     )
 
-    Card(colors = cardColors) {
+    ElevatedCard(
+        colors = cardColors,
+    ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -58,7 +61,7 @@ fun WarningCard(
                     Icon(
                         imageVector = Icons.Default.Error,
                         contentDescription = null,
-                        tint = contentColor,
+                        tint = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.size(18.dp)
                     )
                 }
@@ -67,9 +70,9 @@ fun WarningCard(
 
                 Text(
                     text = message,
-                    style = MiuixTheme.textStyles.body2,
-                    color = cardColors.contentColor,
-                    modifier = Modifier.wrapContentHeight(Alignment.CenterVertically)
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier
+                        .wrapContentHeight(Alignment.CenterVertically)
                 )
             }
 
@@ -78,7 +81,7 @@ fun WarningCard(
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = stringResource(android.R.string.cancel),
-                    tint = contentColor,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier.clickable {
                         onClose()
                     }.size(18.dp).align(Alignment.TopEnd)
@@ -95,14 +98,8 @@ private fun WarningCardPreview() {
         WarningCard(message = "Warning message")
         WarningCard(message = "Warning message", onClose = {})
         WarningCard(
-            message = "Warning message",
-            containerColor = MiuixTheme.colorScheme.error,
-            contentColor = MiuixTheme.colorScheme.onError
-        )
-        WarningCard(
-            message = "Warning message",
-            containerColor = MiuixTheme.colorScheme.outline,
-            contentColor = MiuixTheme.colorScheme.onSurface
-        )
+            message = "Warning message ",
+            MaterialTheme.colorScheme.outlineVariant,
+        ) {}
     }
 }
