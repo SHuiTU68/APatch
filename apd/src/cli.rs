@@ -84,6 +84,7 @@ enum Commands {
     },
 
     /// Manage the built-in NoMount (VFS path redirection) metamodule
+    #[command(name = "nomount")]
     NoMount {
         #[command(subcommand)]
         command: NoMount,
