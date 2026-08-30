@@ -22,6 +22,13 @@
 #define NM_FLAG_VIRTUAL_DIR (1 << 1)
 #define NM_FLAG_WHITEOUT    (1 << 2)
 
+/* hide rule kinds (Kasumi-style hide features, kprobe-free) */
+#define NM_HIDE_MOUNTINFO   (1 << 0)
+#define NM_HIDE_MOUNTS      (1 << 1)
+#define NM_HIDE_MAPS        (1 << 2)
+#define NM_HIDE_SMAPS       (1 << 3)
+#define NM_HIDE_STATFS      (1 << 4)
+
 /* flags for cleanup */
 #define NM_CLEAR_UIDS  (1 << 0)
 #define NM_CLEAR_RULES (1 << 1)
@@ -38,6 +45,7 @@ static LIST_HEAD(nomount_sb_list);
 static DEFINE_IDR(nomount_uid_idr);
 static DECLARE_RWSEM(nomount_rwsem);
 DEFINE_STATIC_SRCU(nomount_srcu);
+static LIST_HEAD(nomount_hide_list);
 
 /* * Helpers to dynamically calculate the memory address of the strings */
 #define nm_get_vpath(rule) ((rule)->paths)
@@ -63,6 +71,7 @@ struct nm_sop {
     const struct xattr_handler **orig_xattr;
     const struct xattr_handler **fake_xattr;
     struct super_block *sb;
+    u32 fake_f_type; /* optional statfs f_type spoof (0 = off) */
     struct rcu_head rcu;
     struct list_head list;
 };
@@ -236,6 +245,10 @@ enum {
     NM_CMD_CLEAR_UIDS,
     NM_CMD_GET_LIST,
     NM_CMD_GET_UIDS,
+    NM_CMD_ADD_HIDE_RULE,
+    NM_CMD_DEL_HIDE_RULE,
+    NM_CMD_CLEAR_HIDE_RULES,
+    NM_CMD_GET_HIDE_RULES,
 };
 
 struct nm_payload {
@@ -259,6 +272,30 @@ struct nm_del_hdr {
 	u32 uid;
 	u16 v_len;
 } __attribute__((packed));
+
+struct nm_hide_rule_hdr {
+	u32 flags; /* NM_HIDE_* */
+	u32 uid;
+	u32 arg;   /* NM_HIDE_STATFS: fake f_type, otherwise 0 */
+	u16 len;   /* hide path prefix length */
+} __attribute__((packed));
+
+struct nm_hide_del_hdr {
+	u32 uid;
+	u16 len;
+} __attribute__((packed));
+
+/* Per-UID hide rule: reader UIDs matching target_uid see proc content
+ * with any line containing path[] (mountpoint/source/pathname) removed. */
+struct nomount_hide_rule {
+	struct list_head list;
+	struct rcu_head rcu;
+	unsigned int target_uid;
+	u32 flags;
+	u32 arg;
+	u16 len;
+	char path[];
+};
 
 /* * Compat macros * */
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 3, 0)

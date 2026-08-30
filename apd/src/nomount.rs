@@ -453,6 +453,112 @@ pub fn uid_clear() -> Result<()> {
     nomount_inject::clear_uids()
 }
 
+/// `apd nomount hide add` — add Kasumi-style hide rule(s).
+///
+/// `flags` is one or more of the `NM_HIDE_*` kinds; `uid` restricts the rule
+/// to a reader uid (0 = apply to everyone); `arg` is the forged statfs
+/// `f_type` when `flags` includes `NM_HIDE_STATFS`. `paths` are the path
+/// prefixes matched against proc file lines.
+pub fn hide_add(flags: u32, uid: u32, arg: u32, paths: &[String]) -> Result<()> {
+    ensure_kernel()?;
+    let rules: Vec<(u32, u32, u32, String)> = paths
+        .iter()
+        .map(|p| (flags, uid, arg, p.clone()))
+        .collect();
+    nomount_inject::add_hide_rules(&rules)
+}
+
+/// `apd nomount hide del` — remove hide rule(s) by path.
+pub fn hide_del(uid: u32, paths: &[String]) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::del_hide_rules(uid, paths)
+}
+
+/// `apd nomount hide list` — print active hide rules (plain or JSON).
+pub fn hide_list(json: bool) -> Result<()> {
+    ensure_kernel()?;
+    let rules = nomount_inject::query_hide_rules()?;
+    if json {
+        let arr: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|r| {
+                let mut m = serde_json::Map::new();
+                let mut kinds = Vec::new();
+                if r.flags & nomount_inject::NM_HIDE_MOUNTINFO != 0 {
+                    kinds.push("mountinfo");
+                }
+                if r.flags & nomount_inject::NM_HIDE_MOUNTS != 0 {
+                    kinds.push("mounts");
+                }
+                if r.flags & nomount_inject::NM_HIDE_MAPS != 0 {
+                    kinds.push("maps");
+                }
+                if r.flags & nomount_inject::NM_HIDE_SMAPS != 0 {
+                    kinds.push("smaps");
+                }
+                if r.flags & nomount_inject::NM_HIDE_STATFS != 0 {
+                    kinds.push("statfs");
+                }
+                m.insert(
+                    "hide".into(),
+                    serde_json::Value::Array(
+                        kinds
+                            .into_iter()
+                            .map(|k| serde_json::Value::String(k.into()))
+                            .collect(),
+                    ),
+                );
+                m.insert("path".into(), serde_json::Value::String(r.path.clone()));
+                if r.uid != 0 {
+                    m.insert("uid".into(), serde_json::Value::Number(r.uid.into()));
+                }
+                if r.flags & nomount_inject::NM_HIDE_STATFS != 0 && r.arg != 0 {
+                    m.insert("f_type".into(), serde_json::Value::Number(r.arg.into()));
+                }
+                serde_json::Value::Object(m)
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Array(arr))?
+        );
+    } else {
+        for r in &rules {
+            let mut kinds = Vec::new();
+            if r.flags & nomount_inject::NM_HIDE_MOUNTINFO != 0 {
+                kinds.push("mountinfo");
+            }
+            if r.flags & nomount_inject::NM_HIDE_MOUNTS != 0 {
+                kinds.push("mounts");
+            }
+            if r.flags & nomount_inject::NM_HIDE_MAPS != 0 {
+                kinds.push("maps");
+            }
+            if r.flags & nomount_inject::NM_HIDE_SMAPS != 0 {
+                kinds.push("smaps");
+            }
+            if r.flags & nomount_inject::NM_HIDE_STATFS != 0 {
+                kinds.push("statfs");
+            }
+            let mut line = format!("{} (hide: {})", r.path, kinds.join(","));
+            if r.uid != 0 {
+                line.push_str(&format!(" [UID: {}]", r.uid));
+            }
+            if r.flags & nomount_inject::NM_HIDE_STATFS != 0 && r.arg != 0 {
+                line.push_str(&format!(" [f_type: {:#x}]", r.arg));
+            }
+            println!("{line}");
+        }
+    }
+    Ok(())
+}
+
+/// `apd nomount hide clear` — remove all hide rules.
+pub fn hide_clear() -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::clear_hide_rules()
+}
+
 /// `apd nomount clear <all|rules|uid>` — clear everything / rules / uids.
 pub fn clear(what: &str) -> Result<()> {
     ensure_kernel()?;

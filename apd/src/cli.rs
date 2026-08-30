@@ -1,5 +1,6 @@
 use crate::{
-    defs, event, insmod, late_load, lua, magica, module, module_config, nomount, supercall, utils,
+    defs, event, insmod, late_load, lua, magica, module, module_config, nomount, nomount_inject,
+    supercall, utils,
 };
 #[cfg(target_os = "android")]
 use android_logger::Config;
@@ -222,6 +223,11 @@ enum NoMount {
         #[command(subcommand)]
         command: NoMountUid,
     },
+    /// Manage hide rules (Kasumi-style, kprobe-free)
+    Hide {
+        #[command(subcommand)]
+        command: NoMountHide,
+    },
     /// Hot load/unload one module's VFS rules
     Module {
         #[command(subcommand)]
@@ -278,6 +284,62 @@ enum NoMountUid {
     /// List blocked uids (JSON array)
     List,
     /// Remove all blocked uids
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountHide {
+    /// Add hide rule(s): <path> [<path> ...]
+    ///
+    /// Flags select what to hide on the given path(s):
+    ///   --mountinfo  drop matching lines from /proc/self/mountinfo
+    ///   --mounts     drop matching lines from /proc/self/mounts
+    ///   --maps       drop matching lines from /proc/self/maps
+    ///   --smaps      drop matching lines from /proc/self/smaps
+    ///   --statfs     forge the filesystem type (f_type) for the sb backing <path>
+    /// Flags may be combined; at least one is required.
+    Add {
+        /// hide path(s) (proc file line field prefix, or path for statfs)
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// drop lines from /proc/self/mountinfo whose fields contain <path>
+        #[arg(long)]
+        mountinfo: bool,
+        /// drop lines from /proc/self/mounts whose fields contain <path>
+        #[arg(long)]
+        mounts: bool,
+        /// drop lines from /proc/self/maps whose fields contain <path>
+        #[arg(long)]
+        maps: bool,
+        /// drop lines from /proc/self/smaps whose fields contain <path>
+        #[arg(long)]
+        smaps: bool,
+        /// forge statfs(2) f_type on the superblock backing <path>
+        #[arg(long)]
+        statfs: bool,
+        /// f_type value for --statfs (decimal; 0 means off)
+        #[arg(long, default_value_t = 0)]
+        f_type: u32,
+        /// restrict the rule to a specific reader uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// Remove hide rule(s): <path> [<path> ...]
+    Del {
+        /// hide path(s) to remove
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// List hide rules
+    List {
+        /// output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove all hide rules
     Clear,
 }
 
@@ -509,6 +571,44 @@ pub fn run() -> Result<()> {
                 NoMountUid::Del { uid } => nomount::uid_del(uid),
                 NoMountUid::List => nomount::uid_list(),
                 NoMountUid::Clear => nomount::uid_clear(),
+            },
+            NoMount::Hide { command } => match command {
+                NoMountHide::Add {
+                    paths,
+                    mountinfo,
+                    mounts,
+                    maps,
+                    smaps,
+                    statfs,
+                    f_type,
+                    uid,
+                } => {
+                    let mut flags: u32 = 0;
+                    if mountinfo {
+                        flags |= nomount_inject::NM_HIDE_MOUNTINFO;
+                    }
+                    if mounts {
+                        flags |= nomount_inject::NM_HIDE_MOUNTS;
+                    }
+                    if maps {
+                        flags |= nomount_inject::NM_HIDE_MAPS;
+                    }
+                    if smaps {
+                        flags |= nomount_inject::NM_HIDE_SMAPS;
+                    }
+                    if statfs {
+                        flags |= nomount_inject::NM_HIDE_STATFS;
+                    }
+                    if flags == 0 {
+                        anyhow::bail!(
+                            "nomount: hide add needs at least one of --mountinfo/--mounts/--maps/--smaps/--statfs"
+                        );
+                    }
+                    nomount::hide_add(flags, uid.unwrap_or(0), f_type, &paths)
+                }
+                NoMountHide::Del { paths, uid } => nomount::hide_del(uid.unwrap_or(0), &paths),
+                NoMountHide::List { json } => nomount::hide_list(json),
+                NoMountHide::Clear => nomount::hide_clear(),
             },
             NoMount::Module { command } => match command {
                 NoMountModule::Inject { id } => nomount::module_inject(&id),

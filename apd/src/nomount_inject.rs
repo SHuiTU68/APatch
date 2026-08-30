@@ -51,7 +51,8 @@ const SYS_ADD_KEY: c_long = 248;
 
 // Command numbers must match the enum in .nmref/nm.h:
 // UNSPEC=0, GET_VERSION=1, ADD_RULE=2, DEL_RULE=3, ADD_UID=4, DEL_UID=5,
-// CLEAR_ALL=6, CLEAR_RULES=7, CLEAR_UIDS=8, GET_LIST=9, GET_UIDS=10.
+// CLEAR_ALL=6, CLEAR_RULES=7, CLEAR_UIDS=8, GET_LIST=9, GET_UIDS=10,
+// ADD_HIDE_RULE=11, DEL_HIDE_RULE=12, CLEAR_HIDE_RULES=13, GET_HIDE_RULES=14.
 const NM_CMD_GET_VERSION: u32 = 1;
 const NM_CMD_ADD_RULE: u32 = 2;
 const NM_CMD_DEL_RULE: u32 = 3;
@@ -62,13 +63,27 @@ const NM_CMD_CLEAR_RULES: u32 = 7;
 const NM_CMD_CLEAR_UIDS: u32 = 8;
 const NM_CMD_GET_LIST: u32 = 9;
 const NM_CMD_GET_UIDS: u32 = 10;
+const NM_CMD_ADD_HIDE_RULE: u32 = 11;
+const NM_CMD_DEL_HIDE_RULE: u32 = 12;
+const NM_CMD_CLEAR_HIDE_RULES: u32 = 13;
+const NM_CMD_GET_HIDE_RULES: u32 = 14;
 
 /// Rule flags (struct nm_rule_hdr.flags): whiteout & virtual-dir.
 pub const NM_FLAG_WHITEOUT: u32 = 4;
 pub const NM_FLAG_VIRTUAL_DIR: u32 = 2;
 
+/// Hide rule kinds (struct nomount_hide_rule.flags), Kasumi-style kprobe-free
+/// hide features. Match the kernel values in nomount.h.
+pub const NM_HIDE_MOUNTINFO: u32 = 1 << 0;
+pub const NM_HIDE_MOUNTS: u32 = 1 << 1;
+pub const NM_HIDE_MAPS: u32 = 1 << 2;
+pub const NM_HIDE_SMAPS: u32 = 1 << 3;
+pub const NM_HIDE_STATFS: u32 = 1 << 4;
+
 const RULE_HDR_SIZE: usize = 12; // struct nm_rule_hdr { u32 flags; u32 uid; u16 v_len; u16 r_len; }
 const DEL_HDR_SIZE: usize = 6; // struct nm_del_hdr { u32 uid; u16 v_len; }
+const HIDE_HDR_SIZE: usize = 14; // struct nm_hide_rule_hdr { u32 flags; u32 uid; u32 arg; u16 len; }
+const HIDE_DEL_HDR_SIZE: usize = 6; // struct nm_hide_del_hdr { u32 uid; u16 len; }
 
 /// Wire payload, layout must match `struct nm_payload` (4096 bytes total).
 #[repr(C, packed)]
@@ -381,6 +396,119 @@ pub fn query_uids() -> Result<Vec<u32>> {
         while pos + 4 <= data.len() {
             out.push(u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap()));
             pos += 4;
+        }
+        cursor = p.arg1;
+    }
+    Ok(out)
+}
+
+/// One hide rule as returned by the kernel (`GET_HIDE_RULES`).
+#[derive(Debug, Clone)]
+pub struct HideRule {
+    pub flags: u32,
+    pub uid: u32,
+    pub arg: u32,
+    pub path: String,
+}
+
+/// Add hide rule(s), native `nm hide add`.
+///
+/// Each entry is `(flags, uid, arg, path)`:
+/// - NM_HIDE_MOUNTINFO/NM_HIDE_MOUNTS/NM_HIDE_MAPS/NM_HIDE_SMAPS use `arg = 0`
+///   and match lines of the corresponding proc file whose fields contain `path`;
+/// - NM_HIDE_STATFS uses `arg` as the forged `f_type` for the superblock that
+///   backs `path`, hiding the real filesystem type from statfs(2).
+/// Rules are queued and flushed in 4068-byte payloads (mirrors add_rules).
+pub fn add_hide_rules(rules: &[(u32, u32, u32, String)]) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    for (flags, uid, arg, path) in rules {
+        let need = HIDE_HDR_SIZE + path.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush_hide_rules(&page, &mut batch)?;
+        }
+        batch.extend_from_slice(&flags.to_ne_bytes());
+        batch.extend_from_slice(&uid.to_ne_bytes());
+        batch.extend_from_slice(&arg.to_ne_bytes());
+        batch.extend_from_slice(&(path.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(path.as_bytes());
+    }
+    flush_hide_rules(&page, &mut batch)?;
+    Ok(())
+}
+
+fn flush_hide_rules(page: &PayloadPage, batch: &mut Vec<u8>) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let status = send(page, NM_CMD_ADD_HIDE_RULE, 0, batch);
+    if status < 0 {
+        warn!("nomount: hide rule batch failed (status {status})");
+    }
+    batch.clear();
+    Ok(())
+}
+
+/// Remove hide rule(s) by path, native `nm hide del`.
+pub fn del_hide_rules(uid: u32, paths: &[String]) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    let flush = |batch: &mut Vec<u8>| {
+        if !batch.is_empty() {
+            let status = send(&page, NM_CMD_DEL_HIDE_RULE, 0, batch);
+            if status < 0 {
+                warn!("nomount: hide rule del batch failed (status {status})");
+            }
+            batch.clear();
+        }
+    };
+    for p in paths {
+        let need = HIDE_DEL_HDR_SIZE + p.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush(&mut batch);
+        }
+        batch.extend_from_slice(&uid.to_ne_bytes());
+        batch.extend_from_slice(&(p.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(p.as_bytes());
+    }
+    flush(&mut batch);
+    Ok(())
+}
+
+/// Clear all hide rules, native `nm hide clear`.
+pub fn clear_hide_rules() -> Result<()> {
+    clear(NM_CMD_CLEAR_HIDE_RULES)
+}
+
+/// Query all active hide rules, native `nm hide list` (same pagination
+/// contract as `query_rules`: the kernel advances `payload->arg1`).
+pub fn query_hide_rules() -> Result<Vec<HideRule>> {
+    let page = PayloadPage::new()?;
+    let mut out = Vec::new();
+    let mut cursor: u32 = 0;
+    loop {
+        let status = send_arg1(&page, NM_CMD_GET_HIDE_RULES, 0, &[], cursor);
+        if status < 0 {
+            bail!("nomount: hide list failed (status {status})");
+        }
+        let p = unsafe { &*page.ptr };
+        if p.data_size == 0 {
+            break;
+        }
+        let data = &p.buffer[..p.data_size as usize];
+        let mut pos = 0;
+        while pos + HIDE_HDR_SIZE <= data.len() {
+            let flags = u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap());
+            let uid = u32::from_ne_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+            let arg = u32::from_ne_bytes(data[pos + 8..pos + 12].try_into().unwrap());
+            let plen = u16::from_ne_bytes(data[pos + 12..pos + 14].try_into().unwrap()) as usize;
+            pos += HIDE_HDR_SIZE;
+            if pos + plen > data.len() {
+                break;
+            }
+            let path = String::from_utf8_lossy(&data[pos..pos + plen]).into_owned();
+            pos += plen;
+            out.push(HideRule { flags, uid, arg, path });
         }
         cursor = p.arg1;
     }

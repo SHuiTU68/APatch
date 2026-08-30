@@ -6,6 +6,12 @@
 #include <linux/cred.h>
 #include <linux/xattr.h>
 #include <linux/module.h>
+#include <linux/seq_file.h>
+#include <linux/uio.h>
+#include <linux/statfs.h>
+#include <linux/sched.h>
+#include <linux/ctype.h>
+#include <linux/pid_namespace.h>
 #include "nomount.h"
 
 static struct kmem_cache *nm_dir_cachep __read_mostly, *nm_inode_cachep __read_mostly;
@@ -431,6 +437,25 @@ generic_fn:
     }
 }
 
+static int nomount_hijacked_statfs(struct dentry *dentry, struct kstatfs *buf)
+{
+    struct nm_sop *nm_sop = __get_nm(smp_load_acquire(&dentry->d_sb->s_op), struct nm_sop, fake_sop, statfs, nomount_hijacked_statfs);
+    int res;
+
+    if (nm_sop && nm_sop->orig_sop && nm_sop->orig_sop->statfs)
+        res = nm_sop->orig_sop->statfs(dentry, buf);
+    else
+        res = simple_statfs(dentry, buf);
+
+    /* NM_HIDE_STATFS: spoof f_type only when a hide rule set one for this sb
+     * (gated by a static branch so the no-hide-rule fast path costs nothing). */
+    if (res == 0 && static_branch_unlikely(&nomount_hide_statfs_active) &&
+        nm_sop && READ_ONCE(nm_sop->fake_f_type))
+        buf->f_type = READ_ONCE(nm_sop->fake_f_type);
+
+    return res;
+}
+
 /*** file / inode / superblock operations ***/
 
 static int nm_open(struct inode *inode, struct file *file)
@@ -846,6 +871,7 @@ static inline void nomount_hijack_superblock(struct super_block *sb)
     nm_sop->fake_sop.destroy_inode = nomount_hijacked_destroy_inode;
     nm_sop->fake_sop.drop_inode = nomount_hijacked_drop_inode;
     nm_sop->fake_sop.evict_inode = nomount_hijacked_evict_inode;
+    nm_sop->fake_sop.statfs = nomount_hijacked_statfs;
 
     if (sb->s_xattr && !nm_sop->orig_xattr) {
         const struct xattr_handler **new_array;
@@ -951,6 +977,855 @@ static void nomount_restore_superblocks(void)
         list_del_rcu(&nm_sop->list);
         kfree_rcu(nm_sop, rcu);
     }
+}
+
+/*** Hide subsystem (Kasumi-style, kprobe-free) ***
+ *
+ * mountinfo/mounts/maps/smaps are all seq_file-backed proc files whose
+ * .read == seq_read().  Instead of kprobe/ftrace we:
+ *   1. attach a filtering file_operations proxy to the proc inode
+ *      (namespace-global /proc/mounts, and lazily per-pid files via
+ *       a proc-root lookup hook that hijacks pid-dir i_op),
+ *   2. on first read, drain the whole seq_file through seq_read_iter()
+ *      into a kernel buffer, drop lines matching any hide rule for the
+ *      calling uid, then serve the filtered buffer.
+ *
+ * Side-channel policy (why we differ from Kasumi):
+ *   - mountinfo: mount IDs are PRESERVED, never renumbered.  Kasumi compacts
+ *     mount IDs and then uses a kprobe on cp_statx to project the fake IDs
+ *     into statx(STATX_MNT_ID).  Without kprobe we cannot rewrite statx, so
+ *     renumbering would desync mountinfo from statx -> detectable.  Keeping
+ *     the original IDs keeps mountinfo consistent with statx and with the
+ *     shared:/master:/propagate_from: propagation references.  A visible
+ *     child of a hidden mount is reparented to its nearest visible ancestor.
+ *   - smaps: dropping only the VMA header leaves the Size:/Rss:/... block
+ *     orphaned -> malformed output.  We drop the whole VMA block instead.
+ *   - statfs f_type spoofing is best-effort: vfs_statx() reads stx_fstype
+ *     straight from sb->s_magic and no VFS ops hook can reach it, so
+ *     statx() will always report the real f_type while statfs() reports the
+ *     forged one.  This residual inconsistency is inherent to a kprobe-free
+ *     build; NM_HIDE_STATFS is therefore only recommended where readers use
+ *     statfs/statvfs and never statx.
+ *
+ * NM_HIDE_STATFS rides on the existing superblock hijack (nm_sop) and
+ * overrides f_type via nomount_hijacked_statfs().
+ */
+
+static struct kmem_cache *nm_hide_fop_cachep __read_mostly, *nm_hide_iop_cachep __read_mostly;
+static DEFINE_STATIC_KEY_FALSE(nomount_hide_proc_active);
+static DEFINE_STATIC_KEY_FALSE(nomount_hide_statfs_active);
+static LIST_HEAD(nm_hide_fop_list);
+static LIST_HEAD(nm_hide_iop_list);
+static LIST_HEAD(nm_hide_files);
+static DEFINE_SPINLOCK(nm_hide_files_lock);
+
+struct nm_hide_file {
+    struct list_head list;
+    struct file *real;          /* underlying file (private_data stays the seq_file) */
+    u32 kinds;                  /* which NM_HIDE_* this file filters */
+    struct mutex lock;
+    char *out;                  /* filtered content */
+    size_t out_len;
+    loff_t out_pos;
+    bool loaded;
+    bool failed;
+};
+
+struct nm_hide_fop {
+    struct file_operations fake_fop; /* MUST be exactly at offset 0 */
+    const struct file_operations *orig_fop;
+    struct inode *inode;             /* inode whose f_op we replaced */
+    u32 kinds;
+    struct list_head list;
+    struct rcu_head rcu;
+};
+
+struct nm_hide_iop {
+    struct inode_operations fake_iop; /* MUST be exactly at offset 0 */
+    const struct inode_operations *orig_iop;
+    struct inode *inode;
+    struct list_head list;
+    struct rcu_head rcu;
+};
+
+#define NM_HIDE_MAX_LINES 1024
+#define NM_HIDE_MAX_FILE  (16 * 1024 * 1024)
+#define NM_HIDE_CHUNK     4096
+
+static bool nm_hide_field_match(const char *line, size_t len, const char *path, size_t plen)
+{
+    size_t i = 0;
+
+    if (unlikely(!plen || !line)) return false;
+    while (i < len) {
+        size_t s, fl;
+        while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+        s = i;
+        while (i < len && line[i] != ' ' && line[i] != '\t' && line[i] != '\n' && line[i] != '\r') i++;
+        fl = i - s;
+        /* exact field match, or path is a directory prefix of the field */
+        if (fl >= plen && !memcmp(line + s, path, plen)) {
+            if (fl == plen) return true;
+            if (line[s + plen] == '/' || line[s + plen] == '\\') return true;
+        }
+    }
+    return false;
+}
+
+static bool nm_hide_drop_line(const char *line, size_t len, u32 kinds, uid_t uid)
+{
+    const struct nomount_hide_rule *r;
+    bool drop = false;
+
+    if (unlikely(!line || !len)) return false;
+    rcu_read_lock();
+    list_for_each_entry_rcu(r, &nomount_hide_list, list) {
+        if ((r->flags & kinds) && r->len &&
+            (r->target_uid == 0 || r->target_uid == uid) &&
+            nm_hide_field_match(line, len, r->path, r->len)) {
+            drop = true;
+            break;
+        }
+    }
+    rcu_read_unlock();
+    return drop;
+}
+
+static bool nm_hide_rule_kind_active(u32 kinds)
+{
+    const struct nomount_hide_rule *r;
+    bool active = false;
+
+    rcu_read_lock();
+    list_for_each_entry_rcu(r, &nomount_hide_list, list) {
+        if (r->flags & kinds) { active = true; break; }
+    }
+    rcu_read_unlock();
+    return active;
+}
+
+static int nm_parse_int(const char *s, size_t len)
+{
+    size_t i = 0;
+    int v = 0;
+
+    while (i < len && (s[i] == ' ' || s[i] == '\t')) i++;
+    while (i < len && s[i] >= '0' && s[i] <= '9') {
+        v = v * 10 + (s[i] - '0');
+        if (v > 100000000) return 0;
+        i++;
+    }
+    return v;
+}
+
+static void nm_parse_mount_ids(const char *line, size_t len, int *id, int *parent)
+{
+    size_t i = 0;
+
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    *id = nm_parse_int(line + i, len - i);
+    while (i < len && line[i] != ' ' && line[i] != '\t') i++;
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    *parent = nm_parse_int(line + i, len - i);
+}
+
+/* Nearest visible ancestor of mount id `p`, or 0 (namespace root) if none.
+ * ids/parents/vis describe every mountinfo line in file order; hidden lines
+ * (vis == false) are skipped while walking up, so a visible child of a hidden
+ * mount is reparented without ever leaking the hidden mount's id. */
+static int nm_hide_nearest_visible(int p, const int *ids, const int *parents,
+                                   const bool *vis, int cnt)
+{
+    int depth = 0;
+
+    while (p > 0 && depth++ < cnt) {
+        int idx = -1, k;
+        for (k = 0; k < cnt; k++) {
+            if (ids[k] == p) { idx = k; break; }
+        }
+        if (idx < 0) return 0; /* parent line absent => treat as namespace root */
+        if (vis[idx]) return p;
+        p = parents[idx];
+    }
+    return 0;
+}
+
+/* mountinfo line: preserve the mount id (field 1), rewrite only the parent id
+ * (field 2) to `npid`.  Preserving ids keeps mountinfo consistent with
+ * statx(STATX_MNT_ID) and with shared:/master:/propagate_from: references. */
+static void nm_hide_emit_mountinfo_line(char *out, size_t *o, size_t cap,
+                                        const char *line, size_t ll, int npid)
+{
+    size_t i = 0, f2s, f2e, used;
+    char tmp[64];
+
+    while (i < ll && (line[i] == ' ' || line[i] == '\t')) i++;
+    while (i < ll && line[i] != ' ' && line[i] != '\t') i++; /* field 1: mount id */
+    while (i < ll && (line[i] == ' ' || line[i] == '\t')) i++;
+    f2s = i; while (i < ll && line[i] != ' ' && line[i] != '\t') i++; f2e = i;
+
+    used = scnprintf(tmp, sizeof(tmp), "%d", npid);
+    if (*o + f2s + used + (ll - f2e) + 1 > cap) return;
+    memcpy(out + *o, line, f2s); *o += f2s;
+    memcpy(out + *o, tmp, used); *o += used;
+    memcpy(out + *o, line + f2e, ll - f2e); *o += ll - f2e;
+    out[(*o)++] = '\n';
+}
+
+/* True if `line` looks like a smaps VMA header: first field is
+ * "hex-start-hex-end" (e.g. 55aa-55bb).  The Size:/Rss:/... lines that follow
+ * start with an alpha key and are NOT headers. */
+static bool nm_hide_smaps_header(const char *line, size_t len)
+{
+    size_t i = 0, s;
+    bool dash = false;
+
+    while (i < len && (line[i] == ' ' || line[i] == '\t')) i++;
+    s = i;
+    while (i < len && line[i] != ' ' && line[i] != '\t' && line[i] != '\n') i++;
+    if (i - s < 3) return false;
+    for (; s < i; s++) {
+        char c = line[s];
+        if (c == '-') {
+            if (dash) return false;
+            dash = true;
+        } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+                     (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return dash;
+}
+
+static int nm_hide_filter(struct nm_hide_file *hf, const char *src, size_t len)
+{
+    struct hide_line { size_t off, len; } *kept;
+    int *all_id = NULL, *all_parent = NULL;
+    bool *vis = NULL;
+    int kept_cnt = 0, all_cnt = 0;
+    bool any_dropped = false, smaps_dropping = false;
+    uid_t uid = current_uid().val;
+    u32 kinds = hf->kinds;
+    bool want_mi = !!(kinds & NM_HIDE_MOUNTINFO);
+    bool want_smaps = !!(kinds & NM_HIDE_SMAPS);
+    size_t i = 0, o = 0;
+    char *out = NULL;
+    int err = 0;
+
+    /* The tables can be large (up to ~25KB in total); keep them off the kernel
+     * stack, which is only 8-16KB. */
+    kept = kmalloc_array(NM_HIDE_MAX_LINES, sizeof(*kept), GFP_KERNEL);
+    if (!kept) return -ENOMEM;
+    if (want_mi) {
+        all_id = kcalloc(NM_HIDE_MAX_LINES, sizeof(int), GFP_KERNEL);
+        all_parent = kcalloc(NM_HIDE_MAX_LINES, sizeof(int), GFP_KERNEL);
+        vis = kcalloc(NM_HIDE_MAX_LINES, sizeof(bool), GFP_KERNEL);
+        if (!all_id || !all_parent || !vis) { err = -ENOMEM; goto out; }
+    }
+
+    /* Fast path: no hide rules active (e.g. fop left over after rules were
+     * cleared) — return the source verbatim. */
+    if (static_branch_unlikely(!nomount_hide_proc_active)) {
+        out = kmalloc(len + 2, GFP_KERNEL);
+        if (!out) { err = -ENOMEM; goto out; }
+        memcpy(out, src, len);
+        hf->out = out;
+        hf->out_len = len;
+        hf->out_pos = 0;
+        hf->loaded = true;
+        goto out;
+    }
+
+    /* Pass 1: classify lines.
+     * mountinfo keeps a per-line id/parent/visible table (needed to reparent
+     * visible children of hidden mounts without leaking hidden ids).
+     * smaps drops whole VMA blocks: when a header matches a rule, every
+     * following non-header line is dropped until the next header, so no
+     * orphaned Size:/Rss:/... metadata survives. */
+    while (i < len) {
+        size_t s = i, ll;
+        bool drop, is_hdr;
+        int id = 0, pid = 0;
+
+        while (i < len && src[i] != '\n') i++;
+        ll = i - s;
+        if (i < len) i++; /* consume '\n' */
+
+        is_hdr = want_smaps && nm_hide_smaps_header(src + s, ll);
+        if (is_hdr) {
+            drop = nm_hide_drop_line(src + s, ll, kinds, uid);
+            smaps_dropping = drop;
+        } else {
+            drop = want_smaps ? smaps_dropping :
+                                nm_hide_drop_line(src + s, ll, kinds, uid);
+        }
+
+        if (want_mi && all_cnt < NM_HIDE_MAX_LINES) {
+            nm_parse_mount_ids(src + s, ll, &id, &pid);
+            all_id[all_cnt] = id;
+            all_parent[all_cnt] = pid;
+            vis[all_cnt] = !drop;
+            all_cnt++;
+        }
+
+        if (drop) {
+            any_dropped = true;
+            continue;
+        }
+        if (kept_cnt < NM_HIDE_MAX_LINES) {
+            kept[kept_cnt].off = s;
+            kept[kept_cnt].len = ll;
+            kept_cnt++;
+        }
+    }
+
+    out = kmalloc(len + 2, GFP_KERNEL);
+    if (!out) { err = -ENOMEM; goto out; }
+
+    if (!any_dropped) {
+        memcpy(out, src, len);
+        o = len;
+    } else if (want_mi) {
+        int k;
+        for (k = 0; k < kept_cnt; k++) {
+            int id, pid;
+            nm_parse_mount_ids(src + kept[k].off, kept[k].len, &id, &pid);
+            nm_hide_emit_mountinfo_line(out, &o, len + 2, src + kept[k].off,
+                                        kept[k].len,
+                                        nm_hide_nearest_visible(pid, all_id,
+                                                                all_parent, vis,
+                                                                all_cnt));
+        }
+    } else {
+        int k;
+        for (k = 0; k < kept_cnt; k++) {
+            size_t ll = kept[k].len;
+            if (o + ll + 1 > len + 2) break;
+            memcpy(out + o, src + kept[k].off, ll); o += ll;
+            out[o++] = '\n';
+        }
+    }
+
+    hf->out = out;
+    hf->out_len = o;
+    hf->out_pos = 0;
+    hf->loaded = true;
+out:
+    kfree(vis);
+    kfree(all_parent);
+    kfree(all_id);
+    kfree(kept);
+    return err;
+}
+
+static int nm_hide_load_file(struct nm_hide_file *hf)
+{
+    size_t cap = 65536, len = 0;
+    char *src;
+    int ret = 0;
+
+    src = kmalloc(cap, GFP_KERNEL);
+    if (!src) return -ENOMEM;
+
+    for (;;) {
+        struct kvec kvec;
+        struct iov_iter iter;
+        struct kiocb iocb;
+        ssize_t n;
+
+        if (len + NM_HIDE_CHUNK > cap) {
+            char *n2 = krealloc(src, cap * 2, GFP_KERNEL);
+            if (!n2) { ret = -ENOMEM; break; }
+            src = n2;
+            cap *= 2;
+        }
+        kvec.iov_base = src + len;
+        kvec.iov_len = NM_HIDE_CHUNK;
+        iov_iter_kvec(&iter, READ, &kvec, 1, NM_HIDE_CHUNK);
+        init_sync_kiocb(&iocb, hf->real);
+        iocb.ki_pos = len;
+        n = seq_read_iter(&iocb, &iter);
+        if (n < 0) { ret = n; break; }
+        if (n == 0) break;
+        len += n;
+        if (len > NM_HIDE_MAX_FILE) { ret = -E2BIG; break; }
+    }
+
+    if (!ret)
+        ret = nm_hide_filter(hf, src, len);
+    kfree(src);
+    return ret;
+}
+
+static int nm_hide_ensure_loaded(struct nm_hide_file *hf)
+{
+    int ret = 0;
+
+    if (READ_ONCE(hf->loaded)) return 0;
+    mutex_lock(&hf->lock);
+    if (hf->loaded) goto out;
+    if (hf->failed) { ret = -EIO; goto out; }
+
+    ret = nm_hide_load_file(hf);
+    if (ret) hf->failed = true;
+out:
+    mutex_unlock(&hf->lock);
+    return ret;
+}
+
+static struct nm_hide_file *nm_hide_file_get(struct file *file)
+{
+    struct nm_hide_file *hf;
+
+    spin_lock(&nm_hide_files_lock);
+    list_for_each_entry(hf, &nm_hide_files, list) {
+        if (hf->real == file) {
+            spin_unlock(&nm_hide_files_lock);
+            return hf;
+        }
+    }
+    spin_unlock(&nm_hide_files_lock);
+    return NULL;
+}
+
+static int nm_hide_open(struct inode *inode, struct file *file)
+{
+    struct nm_hide_fop *fop = __get_nm(file->f_op, struct nm_hide_fop, fake_fop, read, nm_hide_read);
+    struct nm_hide_file *hf;
+    int ret;
+
+    if (unlikely(!fop || !fop->orig_fop || !fop->orig_fop->open)) return -EINVAL;
+    ret = fop->orig_fop->open(inode, file);
+    if (ret) return ret;
+
+    hf = kzalloc(sizeof(*hf), GFP_KERNEL);
+    if (!hf) return -ENOMEM;
+    hf->real = file;
+    hf->kinds = fop->kinds;
+    mutex_init(&hf->lock);
+    spin_lock(&nm_hide_files_lock);
+    list_add_tail(&hf->list, &nm_hide_files);
+    spin_unlock(&nm_hide_files_lock);
+    return 0;
+}
+
+static int nm_hide_release(struct inode *inode, struct file *file)
+{
+    struct nm_hide_fop *fop = __get_nm(file->f_op, struct nm_hide_fop, fake_fop, read, nm_hide_read);
+    struct nm_hide_file *hf = nm_hide_file_get(file);
+
+    if (hf) {
+        spin_lock(&nm_hide_files_lock);
+        list_del(&hf->list);
+        spin_unlock(&nm_hide_files_lock);
+        mutex_lock(&hf->lock);
+        kfree(hf->out);
+        mutex_unlock(&hf->lock);
+        kfree(hf);
+    }
+    if (fop && fop->orig_fop && fop->orig_fop->release)
+        return fop->orig_fop->release(inode, file);
+    return 0;
+}
+
+static ssize_t nm_hide_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
+{
+    struct nm_hide_file *hf = nm_hide_file_get(file);
+    size_t avail, n;
+    int err;
+
+    if (!hf) return -EINVAL;
+    err = nm_hide_ensure_loaded(hf);
+    if (err) return err;
+    if (hf->out_pos >= hf->out_len) return 0;
+    avail = hf->out_len - hf->out_pos;
+    n = min(count, avail);
+    if (!n) return 0;
+    if (copy_to_user(buf, hf->out + hf->out_pos, n)) return -EFAULT;
+    hf->out_pos += n;
+    *ppos = hf->out_pos;
+    return n;
+}
+
+static ssize_t nm_hide_read_iter(struct kiocb *iocb, struct iov_iter *to)
+{
+    struct file *file = iocb->ki_filp;
+    struct nm_hide_file *hf = nm_hide_file_get(file);
+    size_t avail, n;
+    int err;
+
+    if (!hf) return -EINVAL;
+    err = nm_hide_ensure_loaded(hf);
+    if (err) return err;
+    if (hf->out_pos >= hf->out_len) return 0;
+    avail = hf->out_len - hf->out_pos;
+    n = min(iov_iter_count(to), avail);
+    if (!n) return 0;
+    if (copy_to_iter(hf->out + hf->out_pos, n, to) != n) return -EFAULT;
+    hf->out_pos += n;
+    iocb->ki_pos = hf->out_pos;
+    return n;
+}
+
+static loff_t nm_hide_llseek(struct file *file, loff_t offset, int whence)
+{
+    struct nm_hide_file *hf = nm_hide_file_get(file);
+    loff_t base, np;
+    int err;
+
+    if (!hf) return -EINVAL;
+    err = nm_hide_ensure_loaded(hf);
+    if (err) return err;
+    switch (whence) {
+    case SEEK_SET: base = 0; break;
+    case SEEK_CUR: base = hf->out_pos; break;
+    case SEEK_END: base = hf->out_len; break;
+    default: return -EINVAL;
+    }
+    np = base + offset;
+    if (np < 0) return -EINVAL;
+    hf->out_pos = np;
+    return np;
+}
+
+static int nm_hide_attach_fop(struct inode *inode, u32 kinds)
+{
+    const struct file_operations *orig;
+    struct nm_hide_fop *fop;
+
+    if (unlikely(!inode || !inode->i_fop)) return -EINVAL;
+    if (__get_nm(smp_load_acquire(&inode->i_fop), struct nm_hide_fop, fake_fop, read, nm_hide_read))
+        return 0; /* already attached */
+
+    orig = inode->i_fop;
+    fop = kmem_cache_zalloc(nm_hide_fop_cachep, GFP_KERNEL);
+    if (!fop) return -ENOMEM;
+    fop->fake_fop = *orig;
+    fop->orig_fop = orig;
+    fop->inode = inode;
+    fop->kinds = kinds;
+    fop->fake_fop.open = nm_hide_open;
+    fop->fake_fop.release = nm_hide_release;
+    fop->fake_fop.read = nm_hide_read;
+    fop->fake_fop.read_iter = nm_hide_read_iter;
+    fop->fake_fop.llseek = nm_hide_llseek;
+    /* seq files don't support splice on stock kernels; keep it disabled */
+    fop->fake_fop.splice_read = NULL;
+    list_add_tail_rcu(&fop->list, &nm_hide_fop_list);
+    smp_store_release(&inode->i_fop, &fop->fake_fop);
+    nm_debug("Attached hide filter (kinds=0x%x) to ino=%lu\n", kinds, inode->i_ino);
+    return 0;
+}
+
+static bool nm_hide_is_pid_name(const struct qstr *name)
+{
+    int i;
+    if (unlikely(name->len == 0 || name->len > 10)) return false;
+    for (i = 0; i < name->len; i++)
+        if (name->name[i] < '0' || name->name[i] > '9') return false;
+    return true;
+}
+
+static void nm_hide_try_attach_proc_file(struct inode *inode, const struct qstr *name)
+{
+    u32 kinds = 0;
+
+    if (name->len == 6 && !memcmp(name->name, "mounts", 6))
+        kinds = NM_HIDE_MOUNTS;
+    else if (name->len == 9 && !memcmp(name->name, "mountinfo", 9))
+        kinds = NM_HIDE_MOUNTINFO;
+    else if (name->len == 4 && !memcmp(name->name, "maps", 4))
+        kinds = NM_HIDE_MAPS;
+    else if (name->len == 5 && !memcmp(name->name, "smaps", 5))
+        kinds = NM_HIDE_SMAPS;
+    else
+        return;
+
+    if (!nm_hide_rule_kind_active(kinds)) return;
+    nm_hide_attach_fop(inode, kinds);
+}
+
+static struct dentry *nm_hide_pid_dir_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
+{
+    struct nm_hide_iop *h = __get_nm(smp_load_acquire(&dir->i_op), struct nm_hide_iop, fake_iop, lookup, nm_hide_pid_dir_lookup);
+    struct dentry *res;
+
+    if (unlikely(!h || !h->orig_iop || !h->orig_iop->lookup)) return ERR_PTR(-EOPNOTSUPP);
+    res = h->orig_iop->lookup(dir, dentry, flags);
+    if (!IS_ERR_OR_NULL(res)) {
+        struct inode *inode = d_inode(res);
+        if (inode && S_ISREG(inode->i_mode))
+            nm_hide_try_attach_proc_file(inode, &dentry->d_name);
+    }
+    return res;
+}
+
+static void nm_hide_hijack_pid_dir(struct inode *inode)
+{
+    struct nm_hide_iop *h;
+    if (unlikely(!inode || !inode->i_op ||
+                 __get_nm(smp_load_acquire(&inode->i_op), struct nm_hide_iop, fake_iop, lookup, nm_hide_pid_dir_lookup)))
+        return;
+    h = kmem_cache_zalloc(nm_hide_iop_cachep, GFP_KERNEL);
+    if (!h) return;
+    h->fake_iop = *(inode->i_op);
+    h->orig_iop = inode->i_op;
+    h->inode = inode;
+    h->fake_iop.lookup = nm_hide_pid_dir_lookup;
+    list_add_tail_rcu(&h->list, &nm_hide_iop_list);
+    smp_store_release(&inode->i_op, &h->fake_iop);
+}
+
+/*
+ * /proc/self and /proc/thread-self resolve to the reader's own pid dir via
+ * get_link(), which never passes through nm_hide_proc_root_lookup(). If that
+ * pid dir dentry is already cached (the common case for long-running apps),
+ * its inode i_op would otherwise never be hijacked and /proc/self/mounts,
+ * /proc/self/maps etc. would bypass the hide filter. Hook the symlink inode's
+ * get_link to grab the pid dir dentry directly (d_lookup, no path walk) and
+ * hijack it. A cache miss is covered for free: the resolved target walk right
+ * after this returns goes through the /proc root hook, which hijacks it.
+ */
+static const char *nm_hide_self_get_link(struct dentry *dentry, struct inode *inode,
+                                         struct delayed_call *done)
+{
+    struct nm_hide_iop *h = __get_nm(smp_load_acquire(&inode->i_op), struct nm_hide_iop,
+                                     fake_iop, get_link, nm_hide_self_get_link);
+    const char *target;
+
+    if (unlikely(!h || !h->orig_iop || !h->orig_iop->get_link))
+        return ERR_PTR(-EOPNOTSUPP);
+    target = h->orig_iop->get_link(dentry, inode, done);
+    if (!IS_ERR(target)) {
+        char buf[32];
+        struct qstr qname;
+        struct dentry *pd;
+        int n = scnprintf(buf, sizeof(buf), "%u",
+                          task_tgid_nr_ns(current, task_active_pid_ns(current)));
+        qname.name = buf;
+        qname.len = n;
+        qname.hash = full_name_hash(dentry->d_parent, buf, n);
+        pd = d_lookup(dentry->d_parent, &qname);
+        if (pd) {
+            struct inode *pin = d_inode(pd);
+            if (pin && S_ISDIR(pin->i_mode))
+                nm_hide_hijack_pid_dir(pin);
+            dput(pd);
+        }
+    }
+    return target;
+}
+
+static int nm_hide_hijack_self_link(const char *path)
+{
+    struct path p;
+    struct inode *inode;
+    struct nm_hide_iop *h;
+
+    if (kern_path(path, 0, &p)) return 0; /* nofollow: keep the symlink inode */
+    inode = d_backing_inode(p.dentry);
+    if (!inode || !inode->i_op || !inode->i_op->get_link ||
+        __get_nm(smp_load_acquire(&inode->i_op), struct nm_hide_iop, fake_iop,
+                 get_link, nm_hide_self_get_link)) {
+        path_put(&p);
+        return 0;
+    }
+    h = kmem_cache_zalloc(nm_hide_iop_cachep, GFP_KERNEL);
+    if (!h) { path_put(&p); return -ENOMEM; }
+    h->fake_iop = *(inode->i_op);
+    h->orig_iop = inode->i_op;
+    h->inode = inode;
+    h->fake_iop.get_link = nm_hide_self_get_link;
+    list_add_tail_rcu(&h->list, &nm_hide_iop_list);
+    smp_store_release(&inode->i_op, &h->fake_iop);
+    path_put(&p);
+    return 0;
+}
+
+static struct dentry *nm_hide_proc_root_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
+{
+    struct nm_hide_iop *h = __get_nm(smp_load_acquire(&dir->i_op), struct nm_hide_iop, fake_iop, lookup, nm_hide_proc_root_lookup);
+    struct dentry *res;
+
+    if (unlikely(!h || !h->orig_iop || !h->orig_iop->lookup)) return ERR_PTR(-EOPNOTSUPP);
+    res = h->orig_iop->lookup(dir, dentry, flags);
+    if (!IS_ERR_OR_NULL(res)) {
+        struct inode *inode = d_inode(res);
+        if (inode && S_ISDIR(inode->i_mode) && nm_hide_is_pid_name(&dentry->d_name))
+            nm_hide_hijack_pid_dir(inode);
+    }
+    return res;
+}
+
+static int nm_hide_setup_proc_hooks(void)
+{
+    struct path p;
+    struct inode *inode;
+    struct nm_hide_iop *h;
+
+    if (kern_path("/proc", LOOKUP_FOLLOW, &p)) return -ENOENT;
+    inode = d_backing_inode(p.dentry);
+    if (__get_nm(smp_load_acquire(&inode->i_op), struct nm_hide_iop, fake_iop, lookup, nm_hide_proc_root_lookup)) {
+        path_put(&p);
+        return 0;
+    }
+    if (!inode->i_op) { path_put(&p); return -EOPNOTSUPP; }
+
+    h = kmem_cache_zalloc(nm_hide_iop_cachep, GFP_KERNEL);
+    if (!h) { path_put(&p); return -ENOMEM; }
+    h->fake_iop = *(inode->i_op);
+    h->orig_iop = inode->i_op;
+    h->inode = inode;
+    h->fake_iop.lookup = nm_hide_proc_root_lookup;
+    list_add_tail_rcu(&h->list, &nm_hide_iop_list);
+    smp_store_release(&inode->i_op, &h->fake_iop);
+    path_put(&p);
+    nm_debug("Hooked /proc root lookup for pid-dir hide attach\n");
+
+    /* Cover /proc/self and /proc/thread-self, which resolve to the reader's
+     * pid dir via get_link and would otherwise bypass the root hook. */
+    nm_hide_hijack_self_link("/proc/self");
+    nm_hide_hijack_self_link("/proc/thread-self");
+    return 0;
+}
+
+static int nomount_hide_set_sb_f_type(struct super_block *sb, u32 ftype)
+{
+    struct nm_sop *nm_sop;
+
+    if (unlikely(!sb || !sb->s_op)) return -EINVAL;
+    nm_sop = __get_nm(smp_load_acquire(&sb->s_op), struct nm_sop, fake_sop, destroy_inode, nomount_hijacked_destroy_inode);
+    if (!nm_sop) {
+        nomount_hijack_superblock(sb);
+        nm_sop = __get_nm(smp_load_acquire(&sb->s_op), struct nm_sop, fake_sop, destroy_inode, nomount_hijacked_destroy_inode);
+        if (!nm_sop) return -ENOMEM;
+    }
+    WRITE_ONCE(nm_sop->fake_f_type, ftype);
+    return 0;
+}
+
+static int nm_hide_apply_rule(struct nomount_hide_rule *rule)
+{
+    int err = 0;
+
+    if (rule->flags & (NM_HIDE_MOUNTINFO | NM_HIDE_MOUNTS | NM_HIDE_MAPS | NM_HIDE_SMAPS)) {
+        err = nm_hide_setup_proc_hooks();
+        if (err) return err;
+        if (rule->flags & NM_HIDE_MOUNTS) {
+            /* namespace-global /proc/mounts inode (covers df/mount/etc) */
+            struct path p;
+            if (kern_path("/proc/mounts", LOOKUP_FOLLOW, &p) == 0) {
+                nm_hide_attach_fop(d_backing_inode(p.dentry), NM_HIDE_MOUNTS);
+                path_put(&p);
+            }
+        }
+    }
+    if (rule->flags & NM_HIDE_STATFS) {
+        struct path p;
+        if (kern_path(rule->path, LOOKUP_FOLLOW, &p) == 0) {
+            err = nomount_hide_set_sb_f_type(p.dentry->d_sb, rule->arg);
+            path_put(&p);
+        } else {
+            err = -ENOENT;
+        }
+    }
+    return err;
+}
+
+static void nm_hide_recalc_branches(void)
+{
+    const struct nomount_hide_rule *r;
+    bool proc = false, statfs = false;
+
+    list_for_each_entry(r, &nomount_hide_list, list) {
+        if (r->flags & (NM_HIDE_MOUNTINFO | NM_HIDE_MOUNTS | NM_HIDE_MAPS | NM_HIDE_SMAPS)) proc = true;
+        if (r->flags & NM_HIDE_STATFS) statfs = true;
+    }
+    if (proc) static_branch_enable(&nomount_hide_proc_active);
+    else static_branch_disable(&nomount_hide_proc_active);
+    if (statfs) static_branch_enable(&nomount_hide_statfs_active);
+    else static_branch_disable(&nomount_hide_statfs_active);
+}
+
+static void nm_hide_restore_all(void)
+{
+    struct nm_hide_fop *f, *ftmp;
+    struct nm_hide_iop *h, *htmp;
+
+    list_for_each_entry_safe(f, ftmp, &nm_hide_fop_list, list) {
+        if (f->inode) smp_store_release(&f->inode->i_fop, f->orig_fop);
+        list_del_rcu(&f->list);
+        kfree_rcu(f, rcu);
+    }
+    list_for_each_entry_safe(h, htmp, &nm_hide_iop_list, list) {
+        if (h->inode) smp_store_release(&h->inode->i_op, h->orig_iop);
+        list_del_rcu(&h->list);
+        kfree_rcu(h, rcu);
+    }
+}
+
+/* Caller must hold nomount_rwsem (write). */
+static int __nomount_add_hide_rule(u32 flags, unsigned int uid, u32 arg, const char *path, u16 len)
+{
+    struct nomount_hide_rule *rule, *ex;
+    int err;
+
+    if (!len || len >= PATH_MAX) return -EINVAL;
+    if (!(flags & (NM_HIDE_MOUNTINFO | NM_HIDE_MOUNTS | NM_HIDE_MAPS | NM_HIDE_SMAPS | NM_HIDE_STATFS)))
+        return -EINVAL;
+    if ((flags & NM_HIDE_STATFS) && arg == 0) return -EINVAL;
+
+    list_for_each_entry(ex, &nomount_hide_list, list) {
+        if (ex->target_uid == uid && ex->flags == flags && ex->len == len &&
+            !memcmp(ex->path, path, len))
+            return -EEXIST;
+    }
+
+    rule = kmalloc(sizeof(*rule) + len + 1, GFP_KERNEL);
+    if (!rule) return -ENOMEM;
+    rule->target_uid = uid;
+    rule->flags = flags;
+    rule->arg = arg;
+    rule->len = len;
+    memcpy(rule->path, path, len);
+    rule->path[len] = '\0';
+    list_add_tail_rcu(&rule->list, &nomount_hide_list);
+    nm_hide_recalc_branches();
+
+    err = nm_hide_apply_rule(rule);
+    if (err) {
+        list_del_rcu(&rule->list);
+        kfree_rcu(rule, rcu);
+        nm_hide_recalc_branches();
+    }
+    return err;
+}
+
+/* Caller must hold nomount_rwsem (write). */
+static void __nomount_del_hide_rule(unsigned int uid, const char *path, u16 len)
+{
+    struct nomount_hide_rule *r, *tmp;
+
+    list_for_each_entry_safe(r, tmp, &nomount_hide_list, list) {
+        if (r->target_uid == uid && r->len == len && !memcmp(r->path, path, len)) {
+            list_del_rcu(&r->list);
+            kfree_rcu(r, rcu);
+        }
+    }
+    nm_hide_recalc_branches();
+}
+
+/* Caller must hold nomount_rwsem (write). */
+static void __nomount_clear_hide_rules(bool exit)
+{
+    struct nomount_hide_rule *r, *tmp;
+
+    list_for_each_entry_safe(r, tmp, &nomount_hide_list, list) {
+        list_del_rcu(&r->list);
+        kfree_rcu(r, rcu);
+    }
+    nm_hide_recalc_branches();
+    if (exit) nm_hide_restore_all();
 }
 
 /*** Module Management ***/
@@ -1355,6 +2230,7 @@ static void __nomount_clear_all(int clear_flags)
         hlist_for_each_entry_safe(rule, tmp, &r_victims, vpath_node) {
             nm_free_rule(rule);
         }
+        __nomount_clear_hide_rules(!!(clear_flags & NM_CLEAR_EXIT));
     }
 
     if (clear_flags & NM_CLEAR_EXIT) nomount_restore_superblocks();
@@ -1479,6 +2355,61 @@ static int nm_process_payload(unsigned long user_addr)
             payload->data_size = count * 4;
             break;
         }
+
+        case NM_CMD_ADD_HIDE_RULE:
+            if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
+            down_write(&nomount_rwsem);
+            while (buf_ptr + sizeof(struct nm_hide_rule_hdr) <= buf_end) {
+                struct nm_hide_rule_hdr *h = (void *)buf_ptr;
+                if ((buf_ptr += sizeof(*h)) + h->len > buf_end || unlikely(h->len >= PATH_MAX)) break;
+                payload->status = __nomount_add_hide_rule(h->flags, h->uid, h->arg, buf_ptr, h->len);
+                buf_ptr += h->len;
+            }
+            up_write(&nomount_rwsem);
+            payload->arg1 = buf_ptr - payload->buffer;
+            break;
+
+        case NM_CMD_DEL_HIDE_RULE:
+            if (payload->data_size > sizeof(payload->buffer)) { payload->status = -EINVAL; break; }
+            down_write(&nomount_rwsem);
+            while (buf_ptr + sizeof(struct nm_hide_del_hdr) <= buf_end) {
+                struct nm_hide_del_hdr *h = (void *)buf_ptr;
+                if ((buf_ptr += sizeof(*h)) + h->len > buf_end) break;
+                __nomount_del_hide_rule(h->uid, buf_ptr, h->len);
+                buf_ptr += h->len;
+            }
+            up_write(&nomount_rwsem);
+            payload->arg1 = buf_ptr - payload->buffer;
+            payload->status = 0;
+            break;
+
+        case NM_CMD_CLEAR_HIDE_RULES:
+            down_write(&nomount_rwsem);
+            __nomount_clear_hide_rules(false);
+            up_write(&nomount_rwsem);
+            break;
+
+        case NM_CMD_GET_HIDE_RULES: {
+            struct nomount_hide_rule *nm_hr;
+            int current_idx = 0;
+            buf_ptr = payload->buffer;
+            buf_end = payload->buffer + sizeof(payload->buffer);
+
+            down_read(&nomount_rwsem);
+            list_for_each_entry_rcu(nm_hr, &nomount_hide_list, list) {
+                if (current_idx++ < payload->arg1) continue;
+                if (buf_ptr + sizeof(struct nm_hide_rule_hdr) + nm_hr->len > buf_end) { current_idx--; break; }
+                *(struct nm_hide_rule_hdr *)buf_ptr = (struct nm_hide_rule_hdr){
+                    .flags = nm_hr->flags, .uid = nm_hr->target_uid, .arg = nm_hr->arg, .len = nm_hr->len};
+                buf_ptr += sizeof(struct nm_hide_rule_hdr);
+                memcpy(buf_ptr, nm_hr->path, nm_hr->len);
+                buf_ptr += nm_hr->len;
+            }
+            up_read(&nomount_rwsem);
+            payload->data_size = buf_ptr - payload->buffer;
+            payload->arg1 = current_idx;
+            break;
+        }
     }
 
     kunmap(page);
@@ -1507,13 +2438,18 @@ static int __init nomount_init(void)
     nm_inode_cachep = KMEM_CACHE(nm_inode_info, SLAB_HWCACHE_ALIGN);
     nm_iop_cachep   = KMEM_CACHE(nm_iop, SLAB_HWCACHE_ALIGN);
     nm_fop_cachep   = KMEM_CACHE(nm_fop, SLAB_HWCACHE_ALIGN);
+    nm_hide_fop_cachep = KMEM_CACHE(nm_hide_fop, SLAB_HWCACHE_ALIGN);
+    nm_hide_iop_cachep = KMEM_CACHE(nm_hide_iop, SLAB_HWCACHE_ALIGN);
 
-    if (!nm_dir_cachep || !nm_inode_cachep || !nm_iop_cachep || !nm_fop_cachep) {
+    if (!nm_dir_cachep || !nm_inode_cachep || !nm_iop_cachep || !nm_fop_cachep ||
+        !nm_hide_fop_cachep || !nm_hide_iop_cachep) {
         nm_err("Failed to allocate memory slab caches\n");
         if (nm_dir_cachep) kmem_cache_destroy(nm_dir_cachep);
         if (nm_inode_cachep) kmem_cache_destroy(nm_inode_cachep);
         if (nm_iop_cachep) kmem_cache_destroy(nm_iop_cachep);
         if (nm_fop_cachep) kmem_cache_destroy(nm_fop_cachep);
+        if (nm_hide_fop_cachep) kmem_cache_destroy(nm_hide_fop_cachep);
+        if (nm_hide_iop_cachep) kmem_cache_destroy(nm_hide_iop_cachep);
         return -ENOMEM;
     }
 
@@ -1524,6 +2460,8 @@ static int __init nomount_init(void)
         kmem_cache_destroy(nm_inode_cachep);
         kmem_cache_destroy(nm_iop_cachep);
         kmem_cache_destroy(nm_fop_cachep);
+        kmem_cache_destroy(nm_hide_fop_cachep);
+        kmem_cache_destroy(nm_hide_iop_cachep);
         return ret;
     }
 
@@ -1543,6 +2481,8 @@ static void __exit nomount_exit(void)
     kmem_cache_destroy(nm_inode_cachep);
     kmem_cache_destroy(nm_iop_cachep);
     kmem_cache_destroy(nm_fop_cachep);
+    kmem_cache_destroy(nm_hide_fop_cachep);
+    kmem_cache_destroy(nm_hide_iop_cachep);
 
     nm_info("Unloaded successfully\n");
 }
