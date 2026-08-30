@@ -134,14 +134,23 @@ for mod_path in "$MODULES_DIR"/*; do
         if [ -d "$mod_path/$partition" ]; then
             [ -d "/$partition" ] || [ -d "/system/$partition" ] || continue
             echo "[INFO] Mounting module: $mod_name (/$partition)" >> "$LOG_FILE"
-            find -L "$mod_path/$partition" \( -type d -o -type c -o -name ".replace" \) -exec sh -c '
-                for f do
-                    v="${f#'"$mod_path"'}"; [ "${v#/system/odm/}" != "$v" ] && v="/odm/${v#/system/odm/}"
-                    if [ -d "$f" ]; then getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\"y\"" && printf "%s\0" "$v"
-                    elif [ "${f##*/}" = ".replace" ]; then printf "%s\0" "${v%/.replace}"
-                    else printf "%s\0" "$v"; fi
-                done
-            ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" rule add --whiteout >> "$LOG_FILE" 2>&1
+
+            # Whiteout rules are only produced by .replace files, char devices
+            # or dirs carrying the trusted.overlay.opaque xattr. The common
+            # module is plain files/symlinks, so gate the expensive per-dir
+            # getfattr scan behind a cheap detection to keep boot fast.
+            if find -L "$mod_path/$partition" \( -name .replace -o -type c \) 2>/dev/null | grep -q . \
+               || find -L "$mod_path/$partition" -type d -exec getfattr -n trusted.overlay.opaque {} + 2>/dev/null \
+                    | grep -q 'trusted.overlay.opaque="y"'; then
+                find -L "$mod_path/$partition" \( -type d -o -type c -o -name ".replace" \) -exec sh -c '
+                    for f do
+                        v="${f#'"$mod_path"'}"; [ "${v#/system/odm/}" != "$v" ] && v="/odm/${v#/system/odm/}"
+                        if [ -d "$f" ]; then getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\"y\"" && printf "%s\0" "$v"
+                        elif [ "${f##*/}" = ".replace" ]; then printf "%s\0" "${v%/.replace}"
+                        else printf "%s\0" "$v"; fi
+                    done
+                ' _ {} + 2>/dev/null | xargs -0 -r "$LOADER" rule add --whiteout >> "$LOG_FILE" 2>&1
+            fi
 
             find -L "$mod_path/$partition" \( -type f -o -type l \) ! -name ".replace" -exec sh -c '
                 for f do

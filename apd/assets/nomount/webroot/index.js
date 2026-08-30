@@ -465,18 +465,22 @@ async function loadModule(modId) {
         valid_dirs=""
         for p in ${TARGET_PARTITIONS}; do [ -d "$p" ] && { [ -d "/$p" ] || [ -d "/system/$p" ]; } && valid_dirs="$valid_dirs $p"; done
         [ -z "$valid_dirs" ] && exit 0
-        find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
-            for f do
-                v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
-                if [ -d "$f" ]; then
-                    getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
-                elif [ "\${f##*/}" = ".replace" ]; then
-                    printf "/%s\\0" "\${v%/.replace}"
-                else
-                    printf "/%s\\0" "$v"
-                fi
-            done
-        ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add --whiteout
+        if find -L $valid_dirs \\( -name .replace -o -type c \\) 2>/dev/null | grep -q . \\
+           || find -L $valid_dirs -type d -exec getfattr -n trusted.overlay.opaque {} + 2>/dev/null \\
+                | grep -q 'trusted.overlay.opaque="y"'; then
+            find -L $valid_dirs \\( -type d -o -type c -o -name ".replace" \\) -exec sh -c '
+                for f do
+                    v="$f"; [ "\${v#system/odm/}" != "$v" ] && v="odm/\${v#system/odm/}"
+                    if [ -d "$f" ]; then
+                        getfattr -n trusted.overlay.opaque "$f" 2>/dev/null | grep -q "=\\"y\\"" && printf "/%s\\0" "$v"
+                    elif [ "\${f##*/}" = ".replace" ]; then
+                        printf "/%s\\0" "\${v%/.replace}"
+                    else
+                        printf "/%s\\0" "$v"
+                    fi
+                done
+            ' _ {} + 2>/dev/null | xargs -0 -r ${NM_BIN} rule add --whiteout
+        fi
 
         find -L $valid_dirs  \\( -type f -o -type l \\) ! -name ".replace" -exec sh -c '
             mod="$1"; shift
