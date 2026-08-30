@@ -37,7 +37,13 @@ pub const NOMOUNT_MODULE_ID: &str = "nomount";
 pub const NOMOUNT_MODULE_DIR: &str = concatcp!(MODULE_DIR, NOMOUNT_MODULE_ID);
 pub const NOMOUNT_DATA_DIR: &str = concatcp!(WORKING_DIR, "nomount/");
 pub const NOMOUNT_LOG_FILE: &str = concatcp!(NOMOUNT_DATA_DIR, "nomount.log");
-pub const NOMOUNT_BOOT_SEMAPHORE: &str = concatcp!(NOMOUNT_DATA_DIR, ".booting");
+// Embedded layout: the LKM is embedded in this binary and loaded from memory,
+// and the version stamp is a compile-time constant, so the data dir converges
+// on a single file — nomount.log. The exclusion list and boot semaphore (which
+// must survive reboots / process boundaries) live in the APatch working dir
+// root, alongside the other manager markers.
+pub const NOMOUNT_EXCLUSION_FILE: &str = concatcp!(WORKING_DIR, ".nomount_exclusions");
+pub const NOMOUNT_BOOT_SEMAPHORE: &str = concatcp!(WORKING_DIR, ".nomount_booting");
 
 // Module config
 pub const MODULE_CONFIG_DIR: &str = concatcp!(WORKING_DIR, "module_configs/");

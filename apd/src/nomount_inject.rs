@@ -661,8 +661,12 @@ pub fn unload_module(mod_id: &str) -> Result<()> {
 }
 
 /// Register the exclusion-list UIDs with the kernel (replaces `service.sh`).
+///
+/// The exclusion list lives in the APatch working dir root
+/// (`/data/adb/ap/.nomount_exclusions`), not inside the nomount data dir, so
+/// the data dir keeps just `nomount.log`.
 pub fn sync_exclusion_uids() -> Result<usize> {
-    let json_path = Path::new(defs::NOMOUNT_DATA_DIR).join(".exclusion_list.json");
+    let json_path = Path::new(defs::NOMOUNT_EXCLUSION_FILE);
     if !json_path.exists() {
         return Ok(0);
     }
@@ -746,6 +750,26 @@ pub fn ensure_kernel_support() -> Result<bool> {
             info!("nomount: LKM loaded: {}", ko.display());
             mark_kernel_ready();
             return Ok(true);
+        }
+    }
+
+    // 2. Embedded LKM matching this device's KMI, loaded straight from memory.
+    //    The prebuilt is compiled into this binary (include_bytes!), so nothing
+    //    is ever written under the data dir — the dir keeps just nomount.log.
+    if let Some(kmi) = late_load::detect_kmi() {
+        let name = format!("nomount-{kmi}.ko");
+        if let Some((_, data)) = crate::nomount::bundled_lkms().iter().find(|(n, _)| *n == name) {
+            match insmod::load_module(data, c"") {
+                Ok(()) if kernel_version().is_some() => {
+                    info!("nomount: LKM loaded from embedded data: {name}");
+                    mark_kernel_ready();
+                    return Ok(true);
+                }
+                Ok(()) => warn!(
+                    "nomount: embedded LKM {name} loaded but driver still unresponsive"
+                ),
+                Err(e) => warn!("nomount: embedded LKM {name} failed to load: {e:#}"),
+            }
         }
     }
     Ok(false)

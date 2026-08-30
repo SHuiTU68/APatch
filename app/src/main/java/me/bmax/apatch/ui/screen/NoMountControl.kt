@@ -100,8 +100,11 @@ private const val TAG = "NoMountControl"
 // --- Paths (deep APatch integration: all ops go through native `apd nomount`) ---
 private const val NM_APD = "${APApplication.APD_PATH} nomount"
 private const val NM_MOD_DIR = "/data/adb/modules"
-private const val NM_DATA = "/data/adb/ap/nomount"
-private const val NM_EXCLUSIONS = "$NM_DATA/.exclusion_list.json"
+// Embedded layout: the LKM is embedded in the apd binary, the version is a
+// compile-time constant, and the only file left in the nomount data dir is the
+// boot log. The exclusion list lives in the APatch working dir root.
+private const val NM_APP_VERSION = "v2.0.0"
+private const val NM_EXCLUSIONS = "/data/adb/ap/.nomount_exclusions"
 private const val NM_TARGET_PARTITIONS =
     "system system_ext vendor odm product apex oem optics prism mi_ext my_bigball my_carrier my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_reserve my_stock"
 
@@ -962,7 +965,7 @@ object NoMountApi {
             getprop ro.product.vendor.model; [ -z "${'$'}(getprop ro.product.vendor.model)" ] && getprop ro.product.model; echo "|||"
             getprop ro.build.version.release; echo "|||"
             getprop ro.build.version.sdk; echo "|||"
-            grep "version=" $NM_DATA/version | cut -d= -f2; echo "|||"
+            echo "$NM_APP_VERSION"; echo "|||"
             $NM_APD version; echo "|||"
             $NM_APD rule list --json; echo "|||"
             if $NM_APD version > /dev/null 2>&1; then lsmod | grep -q nomount && echo lkm || echo built-in; fi
@@ -1104,7 +1107,7 @@ object NoMountApi {
             jsonStr.toByteArray(StandardCharsets.UTF_8),
             Base64.NO_WRAP
         )
-        val cmd = "mkdir -p $NM_DATA && echo \"$b64\" | base64 -d > $NM_EXCLUSIONS.tmp && mv -f $NM_EXCLUSIONS.tmp $NM_EXCLUSIONS"
+        val cmd = "echo \"$b64\" | base64 -d > $NM_EXCLUSIONS.tmp && mv -f $NM_EXCLUSIONS.tmp $NM_EXCLUSIONS"
         return shellOut(cmd).isSuccess
     }
 
