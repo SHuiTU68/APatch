@@ -63,10 +63,6 @@ class PatchesViewModel : ViewModel() {
     var newExtras = mutableStateListOf<KPModel.IExtraInfo>()
     var newExtrasFileName = mutableListOf<String>()
 
-    /** When true, the NoMount driver is embedded into the boot image as a KPM
-     *  at patch time (kernel-side, no runtime LKM/insmod needed at boot). */
-    var patchNoMount by mutableStateOf(false)
-
     var running by mutableStateOf(false)
     var patching by mutableStateOf(false)
     var patchdone by mutableStateOf(false)

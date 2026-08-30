@@ -74,10 +74,23 @@ fn cleanup_legacy_module() {
     }
 }
 
+/// Write `data` to `path` only when it differs from what's already there, so an
+/// unchanged boot doesn't re-write the same LKM / version stamp to disk.
+fn write_if_changed(path: &Path, data: &[u8]) -> Result<()> {
+    match fs::read(path) {
+        Ok(existing) if existing == data => return Ok(()),
+        _ => {}
+    }
+    fs::write(path, data).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(())
+}
+
 /// Provision the built-in NoMount feature under its data dir.
 ///
 /// Writes a version stamp (what `module.prop` used to carry) and the matching
 /// LKM. Also cleans up the legacy metamodule layout from older builds.
+/// Every write is skipped when the target is already present and unchanged, so
+/// boot-time provisioning is mostly a couple of stat()s, not disk I/O.
 fn provision() -> Result<()> {
     // One-time migration: the working dir moved from /data/adb/nomount to
     // /data/adb/ap/nomount. Run it first so user data (exclusion list, log)
@@ -94,8 +107,7 @@ fn provision() -> Result<()> {
     let _ = fs::remove_dir_all(data_dir.join("bin"));
 
     // Version stamp (replaces the old module.prop version= line).
-    fs::write(data_dir.join("version"), "version=v2.0.0\n")
-        .with_context(|| "Failed to write nomount version")?;
+    write_if_changed(&data_dir.join("version"), b"version=v2.0.0\n")?;
 
     // LKM support: kernels without CONFIG_NOMOUNT=y can still use NoMount by
     // loading a matching nomount-<androidX-Y.Z>.ko. We bundle the official
@@ -146,8 +158,7 @@ fn provision() -> Result<()> {
         .filter(|name| bundled_lkms.iter().any(|(n, _)| n == name));
     if let Some(name) = matched.as_deref() {
         if let Some((_, data)) = bundled_lkms.iter().find(|(n, _)| *n == name) {
-            fs::write(data_lkm.join(name), data)
-                .with_context(|| format!("Failed to write LKM {name}"))?;
+            write_if_changed(&data_lkm.join(name), data)?;
         }
     }
     for (name, _) in bundled_lkms {
@@ -155,13 +166,13 @@ fn provision() -> Result<()> {
             let _ = fs::remove_file(data_lkm.join(name));
         }
     }
-    fs::write(
-        data_lkm.join("README.txt"),
-        "The built-in LKM matching this device's KMI (detected automatically) is\n\
-         provisioned here and loaded at boot via `apd insmod`. For non-GKI or\n\
-         custom kernels, drop a matching nomount-<androidX-Y.Z>.ko here (e.g.\n\
-         nomount-android14-6.1.ko) from the NoMount release\n\
-         (github.com/maxsteeel/nomount); it takes precedence over the bundled one.\n",
+    write_if_changed(
+        &data_lkm.join("README.txt"),
+        b"The built-in LKM matching this device's KMI (detected automatically) is\n\
+          provisioned here and loaded at boot via `apd insmod`. For non-GKI or\n\
+          custom kernels, drop a matching nomount-<androidX-Y.Z>.ko here (e.g.\n\
+          nomount-android14-6.1.ko) from the NoMount release\n\
+          (github.com/maxsteeel/nomount); it takes precedence over the bundled one.\n",
     )?;
 
     info!("NoMount built-in feature provisioned at {}", data_dir.display());

@@ -14,11 +14,28 @@ use std::io::Write;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use log::{info, warn};
 
 use crate::{defs, insmod, late_load};
+
+/// Cached "kernel driver confirmed responsive" state. The NoMount driver (a
+/// built-in or an LKM) cannot spontaneously unload once loaded, so after the
+/// first successful probe we skip the add_key syscall on every later call.
+/// Only the positive result is cached: a negative is never cached, so a user
+/// dropping a matching `.ko` later and re-running enable/inject is retried.
+static KERNEL_READY: OnceLock<()> = OnceLock::new();
+
+fn mark_kernel_ready() {
+    let _ = KERNEL_READY.set(());
+}
+
+/// Cheap cached check: `true` once the driver has been confirmed once.
+pub fn kernel_ready() -> bool {
+    KERNEL_READY.get().is_some()
+}
 
 /// NOMOUNT_MAGIC_SIG from .nmref/nm.h
 const NOMOUNT_MAGIC: u64 = 0x4E4F4D4F554E54;
@@ -404,6 +421,11 @@ fn dir_is_opaque(path: &Path) -> bool {
 
 /// Recursively collect file rules and whiteout rules under `dir`, mirroring
 /// the `find -L` semantics of metamount.sh (symlinks are followed).
+///
+/// Most entries are classified from the readdir `d_type` (`DirEntry::file_type`)
+/// with no extra syscall; only symlinks fall back to `metadata()` (which
+/// dereferences), keeping the `find -L` behavior while avoiding a stat() per
+/// file — thousands of syscalls saved on large module trees.
 fn walk_dir(
     dir: &Path,
     mod_path: &Path,
@@ -417,12 +439,10 @@ fn walk_dir(
     for entry in entries.flatten() {
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        // Dereference like `find -L`; broken symlinks are skipped.
-        let meta = match fs::metadata(&path) {
-            Ok(m) => m,
+        let ftype = match entry.file_type() {
+            Ok(t) => t,
             Err(_) => continue,
         };
-        let ftype = meta.file_type();
         if ftype.is_dir() {
             if dir_is_opaque(&path) {
                 whiteouts.push(vpath_of(&path, mod_path));
@@ -439,6 +459,32 @@ fn walk_dir(
             }
         } else if ftype.is_char_device() {
             whiteouts.push(vpath_of(&path, mod_path));
+        } else if ftype.is_symlink() {
+            // Dereference like `find -L`; broken symlinks are skipped.
+            let meta = match fs::metadata(&path) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let t = meta.file_type();
+            if t.is_dir() {
+                if dir_is_opaque(&path) {
+                    whiteouts.push(vpath_of(&path, mod_path));
+                }
+                walk_dir(&path, mod_path, files, whiteouts);
+            } else if t.is_file() {
+                if name == ".replace" {
+                    if let Some(parent) = path.parent() {
+                        whiteouts.push(vpath_of(parent, mod_path));
+                    }
+                } else {
+                    files.push((
+                        vpath_of(&path, mod_path),
+                        path.to_string_lossy().into_owned(),
+                    ));
+                }
+            } else if t.is_char_device() {
+                whiteouts.push(vpath_of(&path, mod_path));
+            }
         }
     }
 }
@@ -446,22 +492,40 @@ fn walk_dir(
 /// Collect the injectable files (`(vpath, rpath)`) and whiteouts of one module
 /// dir, mirroring the manager's `find` walk (opaque dirs, `.replace`, char
 /// devices and regular files/symlinks, with the `/system/odm` → `/odm` rewrite).
-fn collect_module_paths(mod_path: &Path) -> (Vec<(String, String)>, Vec<String>) {
+///
+/// `partitions` must come from `device_partitions()` (computed once per boot)
+/// so we don't re-stat every partition for every module.
+fn collect_module_paths(
+    mod_path: &Path,
+    partitions: &[&str],
+) -> (Vec<(String, String)>, Vec<String>) {
     let mut files: Vec<(String, String)> = Vec::new();
     let mut whiteouts: Vec<String> = Vec::new();
-    for partition in TARGET_PARTITIONS {
+    for partition in partitions {
         let part_dir = mod_path.join(partition);
         if !part_dir.is_dir() {
-            continue;
-        }
-        if !Path::new(&format!("/{partition}")).exists()
-            && !Path::new(&format!("/system/{partition}")).exists()
-        {
             continue;
         }
         walk_dir(&part_dir, mod_path, &mut files, &mut whiteouts);
     }
     (files, whiteouts)
+}
+
+/// Partitions that exist on this device (either at `/X` or `/system/X`),
+/// cached for the life of this apd process: the mount table does not change
+/// during a boot, so the ~22 stats once per boot replace ~22 stats per module.
+fn device_partitions() -> &'static [&'static str] {
+    static CACHE: OnceLock<Vec<&'static str>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        TARGET_PARTITIONS
+            .iter()
+            .copied()
+            .filter(|p| {
+                Path::new(&format!("/{p}")).exists()
+                    || Path::new(&format!("/system/{p}")).exists()
+            })
+            .collect()
+    })
 }
 
 /// Walk every active module's partition dirs and register VFS path
@@ -474,6 +538,7 @@ pub fn inject_all() -> Result<InjectReport> {
     let modules_dir = Path::new(defs::MODULE_DIR);
     let entries = fs::read_dir(modules_dir)
         .with_context(|| format!("nomount: cannot read {}", modules_dir.display()))?;
+    let partitions = device_partitions();
 
     for entry in entries.flatten() {
         let mod_path = entry.path();
@@ -495,7 +560,7 @@ pub fn inject_all() -> Result<InjectReport> {
             continue;
         }
 
-        let (files, whiteouts) = collect_module_paths(&mod_path);
+        let (files, whiteouts) = collect_module_paths(&mod_path, partitions);
         if files.is_empty() && whiteouts.is_empty() {
             continue;
         }
@@ -531,7 +596,7 @@ pub fn inject_module(mod_id: &str) -> Result<InjectReport> {
         return Ok(InjectReport::default());
     }
 
-    let (files, whiteouts) = collect_module_paths(&mod_path);
+    let (files, whiteouts) = collect_module_paths(&mod_path, device_partitions());
     if files.is_empty() && whiteouts.is_empty() {
         return Ok(InjectReport::default());
     }
@@ -560,7 +625,7 @@ pub fn unload_module(mod_id: &str) -> Result<()> {
     if !mod_path.is_dir() {
         bail!("nomount: module not found: {mod_id}");
     }
-    let (files, whiteouts) = collect_module_paths(&mod_path);
+    let (files, whiteouts) = collect_module_paths(&mod_path, device_partitions());
 
     let page = PayloadPage::new()?;
     let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
@@ -632,8 +697,17 @@ pub fn sync_exclusion_uids() -> Result<usize> {
 
 /// Make sure the NoMount kernel API responds, loading a matching LKM if needed
 /// (native equivalent of metamount.sh's `try_load_lkm`).
+///
+/// Once the driver answers, the result is cached for the life of this apd
+/// process: boot calls it twice (`inject_at_boot` then `inject`) and every
+/// interactive op re-checks, so the cached flag turns those into a free
+/// return instead of a fresh add_key probe (plus an LKM scan on failure).
 pub fn ensure_kernel_support() -> Result<bool> {
+    if kernel_ready() {
+        return Ok(true);
+    }
     if kernel_version().is_some() {
+        mark_kernel_ready();
         return Ok(true);
     }
 
@@ -670,6 +744,7 @@ pub fn ensure_kernel_support() -> Result<bool> {
     for ko in candidates {
         if insmod::insmod(&ko, &[]).is_ok() && kernel_version().is_some() {
             info!("nomount: LKM loaded: {}", ko.display());
+            mark_kernel_ready();
             return Ok(true);
         }
     }
