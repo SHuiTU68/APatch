@@ -117,14 +117,20 @@ impl Drop for PayloadPage {
 }
 
 /// Send one payload and return the kernel-written status (<0 on error).
-fn send(page: &PayloadPage, cmd: u32, target_uid: u32, data: &[u8]) -> i32 {
+///
+/// `arg1` is the pagination cursor passed straight through to the kernel:
+/// for `GET_LIST`/`GET_UIDS` it must carry over the value the kernel wrote on
+/// the previous call (the reference `nm.c` never resets it between requests,
+/// see `nm_send_payload` in `.nmref/nm.h`), otherwise the kernel keeps
+/// returning the same first batch and the caller loops forever.
+fn send_arg1(page: &PayloadPage, cmd: u32, target_uid: u32, data: &[u8], arg1: u32) -> i32 {
     unsafe {
         let p = &mut *page.ptr;
         p.magic = NOMOUNT_MAGIC;
         p.cmd = cmd;
         p.target_uid = target_uid;
         p.status = -1;
-        p.arg1 = 0;
+        p.arg1 = arg1;
         p.data_size = data.len() as u32;
         if !data.is_empty() {
             ptr::copy_nonoverlapping(data.as_ptr(), p.buffer.as_mut_ptr(), data.len());
@@ -144,6 +150,11 @@ fn send(page: &PayloadPage, cmd: u32, target_uid: u32, data: &[u8]) -> i32 {
         );
         p.status
     }
+}
+
+/// Send one payload, resetting the pagination cursor (all non-query commands).
+fn send(page: &PayloadPage, cmd: u32, target_uid: u32, data: &[u8]) -> i32 {
+    send_arg1(page, cmd, target_uid, data, 0)
 }
 
 /// Query the kernel driver version; `None` means the API is missing (no
@@ -306,12 +317,16 @@ pub fn clear_uids() -> Result<()> {
 }
 
 /// Query all active rules, native `nm rule list` (mirrors the `nm.c` loop:
-/// keep sending until the kernel reports an empty payload).
+/// keep sending until the kernel reports an empty payload). The kernel tracks
+/// the scan position in `payload->arg1` (see `NM_CMD_GET_LIST` in nomount.c),
+/// so each request must pass back the cursor from the previous reply, or the
+/// kernel would return the same first batch forever.
 pub fn query_rules() -> Result<Vec<RuleEntry>> {
     let page = PayloadPage::new()?;
     let mut out = Vec::new();
+    let mut cursor: u32 = 0;
     loop {
-        let status = send(&page, NM_CMD_GET_LIST, 0, &[]);
+        let status = send_arg1(&page, NM_CMD_GET_LIST, 0, &[], cursor);
         if status < 0 {
             bail!("nomount: rule list failed (status {status})");
         }
@@ -341,16 +356,19 @@ pub fn query_rules() -> Result<Vec<RuleEntry>> {
                 real_path,
             });
         }
+        cursor = p.arg1;
     }
     Ok(out)
 }
 
-/// Query all blocked uids, native `nm uid list`.
+/// Query all blocked uids, native `nm uid list` (same pagination contract as
+/// `query_rules`: the kernel advances `payload->arg1` past the returned ids).
 pub fn query_uids() -> Result<Vec<u32>> {
     let page = PayloadPage::new()?;
     let mut out = Vec::new();
+    let mut cursor: u32 = 0;
     loop {
-        let status = send(&page, NM_CMD_GET_UIDS, 0, &[]);
+        let status = send_arg1(&page, NM_CMD_GET_UIDS, 0, &[], cursor);
         if status < 0 {
             bail!("nomount: uid list failed (status {status})");
         }
@@ -364,6 +382,7 @@ pub fn query_uids() -> Result<Vec<u32>> {
             out.push(u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap()));
             pos += 4;
         }
+        cursor = p.arg1;
     }
     Ok(out)
 }
