@@ -33,13 +33,25 @@ const SYS_ADD_KEY: c_long = 309;
 const SYS_ADD_KEY: c_long = 248;
 
 // Command numbers must match the enum in .nmref/nm.h:
-// UNSPEC=0, GET_VERSION=1, ADD_RULE=2, DEL_RULE=3, ADD_UID=4, DEL_UID=5, ...
+// UNSPEC=0, GET_VERSION=1, ADD_RULE=2, DEL_RULE=3, ADD_UID=4, DEL_UID=5,
+// CLEAR_ALL=6, CLEAR_RULES=7, CLEAR_UIDS=8, GET_LIST=9, GET_UIDS=10.
 const NM_CMD_GET_VERSION: u32 = 1;
 const NM_CMD_ADD_RULE: u32 = 2;
+const NM_CMD_DEL_RULE: u32 = 3;
 const NM_CMD_ADD_UID: u32 = 4;
-const NM_FLAG_WHITEOUT: u32 = 4;
+const NM_CMD_DEL_UID: u32 = 5;
+const NM_CMD_CLEAR_ALL: u32 = 6;
+const NM_CMD_CLEAR_RULES: u32 = 7;
+const NM_CMD_CLEAR_UIDS: u32 = 8;
+const NM_CMD_GET_LIST: u32 = 9;
+const NM_CMD_GET_UIDS: u32 = 10;
+
+/// Rule flags (struct nm_rule_hdr.flags): whiteout & virtual-dir.
+pub const NM_FLAG_WHITEOUT: u32 = 4;
+pub const NM_FLAG_VIRTUAL_DIR: u32 = 2;
 
 const RULE_HDR_SIZE: usize = 12; // struct nm_rule_hdr { u32 flags; u32 uid; u16 v_len; u16 r_len; }
+const DEL_HDR_SIZE: usize = 6; // struct nm_del_hdr { u32 uid; u16 v_len; }
 
 /// Wire payload, layout must match `struct nm_payload` (4096 bytes total).
 #[repr(C, packed)]
@@ -171,6 +183,174 @@ fn queue_rule(page: &PayloadPage, batch: &mut Vec<u8>, vpath: &str, rpath: &str)
     Ok(())
 }
 
+/// One VFS redirection rule as returned by the kernel (`GET_LIST`).
+#[derive(Debug, Clone)]
+pub struct RuleEntry {
+    pub flags: u32,
+    pub uid: u32,
+    pub virtual_path: String,
+    pub real_path: String,
+}
+
+/// Add VFS redirection rule(s), native `nm rule add`.
+///
+/// Each entry is `(vpath, rpath)`; when `whiteout` is true only the vpath is
+/// used and every entry is registered as a whiteout (matching `nm.c`).
+/// Rules are queued and flushed in 4068-byte payloads.
+pub fn add_rules(rules: &[(String, Option<String>)], uid: u32, whiteout: bool) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    for (v, r) in rules {
+        let rpath = if whiteout { "" } else { r.as_deref().unwrap_or("") };
+        let need = RULE_HDR_SIZE + v.len() + rpath.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush_rules(&page, &mut batch)?;
+        }
+        let flags = if whiteout { NM_FLAG_WHITEOUT } else { 0 };
+        batch.extend_from_slice(&flags.to_ne_bytes());
+        batch.extend_from_slice(&uid.to_ne_bytes());
+        batch.extend_from_slice(&(v.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(&(rpath.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(v.as_bytes());
+        batch.extend_from_slice(rpath.as_bytes());
+    }
+    flush_rules(&page, &mut batch)?;
+    Ok(())
+}
+
+/// Remove VFS redirection rule(s) by virtual path, native `nm rule del`.
+pub fn del_rules(paths: &[String], uid: u32) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    let flush = |batch: &mut Vec<u8>| {
+        if !batch.is_empty() {
+            let status = send(&page, NM_CMD_DEL_RULE, 0, batch);
+            if status < 0 {
+                warn!("nomount: rule del batch failed (status {status})");
+            }
+            batch.clear();
+        }
+    };
+    for p in paths {
+        let need = DEL_HDR_SIZE + p.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush(&mut batch);
+        }
+        batch.extend_from_slice(&uid.to_ne_bytes());
+        batch.extend_from_slice(&(p.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(p.as_bytes());
+    }
+    flush(&mut batch);
+    Ok(())
+}
+
+/// Add an app uid to the exclusion list, native `nm uid add` (-EEXIST is fine).
+pub fn add_uid(uid: u32) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let status = send(&page, NM_CMD_ADD_UID, uid, &[]);
+    if status < 0 && status != -17 {
+        bail!("nomount: uid add {uid} failed (status {status})");
+    }
+    Ok(())
+}
+
+/// Remove an app uid from the exclusion list, native `nm uid del`.
+pub fn del_uid(uid: u32) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let status = send(&page, NM_CMD_DEL_UID, uid, &[]);
+    if status < 0 && status != -17 {
+        bail!("nomount: uid del {uid} failed (status {status})");
+    }
+    Ok(())
+}
+
+fn clear(cmd: u32) -> Result<()> {
+    let page = PayloadPage::new()?;
+    let status = send(&page, cmd, 0, &[]);
+    if status < 0 {
+        bail!("nomount: clear command {cmd} failed (status {status})");
+    }
+    Ok(())
+}
+
+/// Clear every VFS rule and blocked uid (native `nm clear all`).
+pub fn clear_all() -> Result<()> {
+    clear(NM_CMD_CLEAR_ALL)
+}
+
+/// Clear only the VFS redirection rules (native `nm clear rules`).
+pub fn clear_rules() -> Result<()> {
+    clear(NM_CMD_CLEAR_RULES)
+}
+
+/// Clear only the blocked uids (native `nm clear uid`).
+pub fn clear_uids() -> Result<()> {
+    clear(NM_CMD_CLEAR_UIDS)
+}
+
+/// Query all active rules, native `nm rule list` (mirrors the `nm.c` loop:
+/// keep sending until the kernel reports an empty payload).
+pub fn query_rules() -> Result<Vec<RuleEntry>> {
+    let page = PayloadPage::new()?;
+    let mut out = Vec::new();
+    loop {
+        let status = send(&page, NM_CMD_GET_LIST, 0, &[]);
+        if status < 0 {
+            bail!("nomount: rule list failed (status {status})");
+        }
+        let p = unsafe { &*page.ptr };
+        if p.data_size == 0 {
+            break;
+        }
+        let data = &p.buffer[..p.data_size as usize];
+        let mut pos = 0;
+        while pos + RULE_HDR_SIZE <= data.len() {
+            let flags = u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap());
+            let uid = u32::from_ne_bytes(data[pos + 4..pos + 8].try_into().unwrap());
+            let vlen = u16::from_ne_bytes(data[pos + 8..pos + 10].try_into().unwrap()) as usize;
+            let rlen = u16::from_ne_bytes(data[pos + 10..pos + 12].try_into().unwrap()) as usize;
+            pos += RULE_HDR_SIZE;
+            if pos + vlen + rlen > data.len() {
+                break;
+            }
+            let virtual_path = String::from_utf8_lossy(&data[pos..pos + vlen]).into_owned();
+            pos += vlen;
+            let real_path = String::from_utf8_lossy(&data[pos..pos + rlen]).into_owned();
+            pos += rlen;
+            out.push(RuleEntry {
+                flags,
+                uid,
+                virtual_path,
+                real_path,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Query all blocked uids, native `nm uid list`.
+pub fn query_uids() -> Result<Vec<u32>> {
+    let page = PayloadPage::new()?;
+    let mut out = Vec::new();
+    loop {
+        let status = send(&page, NM_CMD_GET_UIDS, 0, &[]);
+        if status < 0 {
+            bail!("nomount: uid list failed (status {status})");
+        }
+        let p = unsafe { &*page.ptr };
+        if p.data_size == 0 {
+            break;
+        }
+        let data = &p.buffer[..p.data_size as usize];
+        let mut pos = 0;
+        while pos + 4 <= data.len() {
+            out.push(u32::from_ne_bytes(data[pos..pos + 4].try_into().unwrap()));
+            pos += 4;
+        }
+    }
+    Ok(out)
+}
+
 /// Result summary of an injection pass.
 #[derive(Default, Debug)]
 pub struct InjectReport {
@@ -263,6 +443,27 @@ fn walk_dir(
     }
 }
 
+/// Collect the injectable files (`(vpath, rpath)`) and whiteouts of one module
+/// dir, mirroring the manager's `find` walk (opaque dirs, `.replace`, char
+/// devices and regular files/symlinks, with the `/system/odm` → `/odm` rewrite).
+fn collect_module_paths(mod_path: &Path) -> (Vec<(String, String)>, Vec<String>) {
+    let mut files: Vec<(String, String)> = Vec::new();
+    let mut whiteouts: Vec<String> = Vec::new();
+    for partition in TARGET_PARTITIONS {
+        let part_dir = mod_path.join(partition);
+        if !part_dir.is_dir() {
+            continue;
+        }
+        if !Path::new(&format!("/{partition}")).exists()
+            && !Path::new(&format!("/system/{partition}")).exists()
+        {
+            continue;
+        }
+        walk_dir(&part_dir, mod_path, &mut files, &mut whiteouts);
+    }
+    (files, whiteouts)
+}
+
 /// Walk every active module's partition dirs and register VFS path
 /// redirections with the kernel driver, in-process.
 pub fn inject_all() -> Result<InjectReport> {
@@ -294,20 +495,7 @@ pub fn inject_all() -> Result<InjectReport> {
             continue;
         }
 
-        let mut files: Vec<(String, String)> = Vec::new();
-        let mut whiteouts: Vec<String> = Vec::new();
-        for partition in TARGET_PARTITIONS {
-            let part_dir = mod_path.join(partition);
-            if !part_dir.is_dir() {
-                continue;
-            }
-            if !Path::new(&format!("/{partition}")).exists()
-                && !Path::new(&format!("/system/{partition}")).exists()
-            {
-                continue;
-            }
-            walk_dir(&part_dir, &mod_path, &mut files, &mut whiteouts);
-        }
+        let (files, whiteouts) = collect_module_paths(&mod_path);
         if files.is_empty() && whiteouts.is_empty() {
             continue;
         }
@@ -327,6 +515,84 @@ pub fn inject_all() -> Result<InjectReport> {
     }
     flush_rules(&page, &mut batch)?;
     Ok(report)
+}
+
+/// Hot-inject a single module's files into the VFS rules (native replacement
+/// for the manager's `find | xargs nm rule add` pipeline).
+pub fn inject_module(mod_id: &str) -> Result<InjectReport> {
+    let mod_path = Path::new(defs::MODULE_DIR).join(mod_id);
+    if !mod_path.is_dir() {
+        bail!("nomount: module not found: {mod_id}");
+    }
+    if ["disable", "remove", "skip_mount"]
+        .iter()
+        .any(|m| mod_path.join(m).exists())
+    {
+        return Ok(InjectReport::default());
+    }
+
+    let (files, whiteouts) = collect_module_paths(&mod_path);
+    if files.is_empty() && whiteouts.is_empty() {
+        return Ok(InjectReport::default());
+    }
+
+    let page = PayloadPage::new()?;
+    let mut report = InjectReport::default();
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    for w in &whiteouts {
+        queue_rule(&page, &mut batch, w, "")?;
+        report.whiteouts += 1;
+    }
+    flush_rules(&page, &mut batch)?;
+    for (v, r) in &files {
+        queue_rule(&page, &mut batch, v, r)?;
+        report.files += 1;
+    }
+    flush_rules(&page, &mut batch)?;
+    report.modules = 1;
+    Ok(report)
+}
+
+/// Hot-unload a single module (remove all its rules, native replacement for
+/// the manager's `find | xargs nm rule del` pipeline).
+pub fn unload_module(mod_id: &str) -> Result<()> {
+    let mod_path = Path::new(defs::MODULE_DIR).join(mod_id);
+    if !mod_path.is_dir() {
+        bail!("nomount: module not found: {mod_id}");
+    }
+    let (files, whiteouts) = collect_module_paths(&mod_path);
+
+    let page = PayloadPage::new()?;
+    let mut batch: Vec<u8> = Vec::with_capacity(PAYLOAD_BUF_SIZE);
+    let flush = |batch: &mut Vec<u8>| {
+        if !batch.is_empty() {
+            let status = send(&page, NM_CMD_DEL_RULE, 0, batch);
+            if status < 0 {
+                warn!("nomount: rule del batch failed (status {status})");
+            }
+            batch.clear();
+        }
+    };
+    for w in &whiteouts {
+        let need = DEL_HDR_SIZE + w.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush(&mut batch);
+        }
+        batch.extend_from_slice(&0u32.to_ne_bytes());
+        batch.extend_from_slice(&(w.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(w.as_bytes());
+    }
+    for (v, _) in &files {
+        let need = DEL_HDR_SIZE + v.len();
+        if !batch.is_empty() && batch.len() + need > PAYLOAD_BUF_SIZE {
+            flush(&mut batch);
+        }
+        batch.extend_from_slice(&0u32.to_ne_bytes());
+        batch.extend_from_slice(&(v.len() as u16).to_ne_bytes());
+        batch.extend_from_slice(v.as_bytes());
+    }
+    flush(&mut batch);
+    Ok(())
 }
 
 /// Register the exclusion-list UIDs with the kernel (replaces `service.sh`).

@@ -7,9 +7,10 @@
 //!
 //! It is fully built in: there is no module dir under `/data/adb/modules` and
 //! no metamodule symlink — the feature never shows up in the module page.
-//! Everything lives under the working dir (`/data/adb/ap/nomount`): the `nm`
-//! CLI helper (interactive ops from the manager), the matching LKM, the boot
-//! log and the state markers. The toggle state is persisted in the
+//! Everything lives under the working dir (`/data/adb/ap/nomount`): the
+//! matching LKM, the boot log and the state markers. Interactive operations
+//! (rule/uid management) are native `apd nomount` subcommands; there is no
+//! separate `nm` binary anymore. The toggle state is persisted in the
 //! `NOMOUNT_ENABLE_FILE` marker so the daemon can re-provision and re-inject
 //! at boot independently of any module machinery.
 
@@ -75,9 +76,8 @@ fn cleanup_legacy_module() {
 
 /// Provision the built-in NoMount feature under its data dir.
 ///
-/// Writes the `nm` CLI helper (interactive ops from the manager), a version
-/// stamp (what `module.prop` used to carry) and the matching LKM. Also cleans
-/// up the legacy metamodule layout from older builds.
+/// Writes a version stamp (what `module.prop` used to carry) and the matching
+/// LKM. Also cleans up the legacy metamodule layout from older builds.
 fn provision() -> Result<()> {
     // One-time migration: the working dir moved from /data/adb/nomount to
     // /data/adb/ap/nomount. Run it first so user data (exclusion list, log)
@@ -88,13 +88,10 @@ fn provision() -> Result<()> {
     let data_dir = Path::new(defs::NOMOUNT_DATA_DIR);
     fs::create_dir_all(data_dir)?;
 
-    // nm CLI helper, used by the manager for interactive ops (hot load/unload,
-    // uid management). Boot-time injection is native and never shells out to it.
-    let bin_dir = data_dir.join("bin");
-    fs::create_dir_all(&bin_dir)?;
-    fs::write(bin_dir.join("nm"), include_bytes!("../assets/nomount/bin/nm"))
-        .with_context(|| "Failed to write nm binary")?;
-    utils::ensure_binary(bin_dir.join("nm"))?;
+    // Deep APatch integration: interactive ops are native `apd nomount`
+    // subcommands, so no separate `nm` binary is deployed. Drop the old bin
+    // helper left over from earlier builds.
+    let _ = fs::remove_dir_all(data_dir.join("bin"));
 
     // Version stamp (replaces the old module.prop version= line).
     fs::write(data_dir.join("version"), "version=v2.0.0\n")
@@ -330,4 +327,144 @@ pub fn status() -> Result<()> {
         }
     );
     Ok(())
+}
+
+/// Shared guard for interactive ops: the kernel API must respond first.
+fn ensure_kernel() -> Result<()> {
+    if !nomount_inject::ensure_kernel_support()? {
+        bail!("NoMount Internal API is missing/unresponsive");
+    }
+    Ok(())
+}
+
+/// `apd nomount version` — print the NoMount kernel driver version.
+pub fn version() -> Result<()> {
+    match nomount_inject::kernel_version() {
+        Some(v) => {
+            println!("{v}");
+            Ok(())
+        }
+        None => bail!("NoMount Internal API is missing/unresponsive"),
+    }
+}
+
+/// `apd nomount rule add` — add VFS redirection rule(s).
+pub fn rule_add(rules: &[(String, Option<String>)], uid: u32, whiteout: bool) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::add_rules(rules, uid, whiteout)
+}
+
+/// `apd nomount rule del` — remove VFS redirection rule(s).
+pub fn rule_del(paths: &[String], uid: u32) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::del_rules(paths, uid)
+}
+
+/// `apd nomount rule list` — print active VFS rules (plain or JSON).
+pub fn rule_list(json: bool) -> Result<()> {
+    ensure_kernel()?;
+    let rules = nomount_inject::query_rules()?;
+    if json {
+        let arr: Vec<serde_json::Value> = rules
+            .iter()
+            .map(|r| {
+                let mut m = serde_json::Map::new();
+                m.insert(
+                    "virtual".into(),
+                    serde_json::Value::String(r.virtual_path.clone()),
+                );
+                if r.flags & nomount_inject::NM_FLAG_WHITEOUT != 0 {
+                    m.insert("whiteout".into(), serde_json::Value::Bool(true));
+                } else if r.flags & nomount_inject::NM_FLAG_VIRTUAL_DIR != 0 {
+                    m.insert("virtual_dir".into(), serde_json::Value::Bool(true));
+                } else {
+                    m.insert(
+                        "real".into(),
+                        serde_json::Value::String(r.real_path.clone()),
+                    );
+                }
+                if r.uid != 0 {
+                    m.insert("uid".into(), serde_json::Value::Number(r.uid.into()));
+                }
+                serde_json::Value::Object(m)
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Array(arr))?
+        );
+    } else {
+        for r in &rules {
+            if r.flags & nomount_inject::NM_FLAG_WHITEOUT != 0 {
+                println!("{} (whiteout)", r.virtual_path);
+            } else if r.flags & nomount_inject::NM_FLAG_VIRTUAL_DIR != 0 {
+                println!("{} (virtual dir)", r.virtual_path);
+            } else if r.uid != 0 {
+                println!("{} -> {} [UID: {}]", r.virtual_path, r.real_path, r.uid);
+            } else {
+                println!("{} -> {}", r.virtual_path, r.real_path);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `apd nomount rule clear` — remove all VFS redirection rules.
+pub fn rule_clear() -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::clear_rules()
+}
+
+/// `apd nomount uid add` — block an app uid.
+pub fn uid_add(uid: u32) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::add_uid(uid)
+}
+
+/// `apd nomount uid del` — unblock an app uid.
+pub fn uid_del(uid: u32) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::del_uid(uid)
+}
+
+/// `apd nomount uid list` — print blocked uids as a JSON array.
+pub fn uid_list() -> Result<()> {
+    ensure_kernel()?;
+    let uids = nomount_inject::query_uids()?;
+    println!("{}", serde_json::to_string(&uids)?);
+    Ok(())
+}
+
+/// `apd nomount uid clear` — remove all blocked uids.
+pub fn uid_clear() -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::clear_uids()
+}
+
+/// `apd nomount clear <all|rules|uid>` — clear everything / rules / uids.
+pub fn clear(what: &str) -> Result<()> {
+    ensure_kernel()?;
+    match what {
+        "all" => nomount_inject::clear_all(),
+        "rules" => nomount_inject::clear_rules(),
+        "uid" | "uids" => nomount_inject::clear_uids(),
+        _ => bail!("nomount: clear expects 'all', 'rules' or 'uid'"),
+    }
+}
+
+/// `apd nomount module inject <id>` — hot-inject one module's files.
+pub fn module_inject(id: &str) -> Result<()> {
+    ensure_kernel()?;
+    let report = nomount_inject::inject_module(id)?;
+    info!(
+        "nomount: hot-injected {id}: {} file(s), {} whiteout(s)",
+        report.files, report.whiteouts
+    );
+    Ok(())
+}
+
+/// `apd nomount module unload <id>` — hot-unload one module's files.
+pub fn module_unload(id: &str) -> Result<()> {
+    ensure_kernel()?;
+    nomount_inject::unload_module(id)
 }

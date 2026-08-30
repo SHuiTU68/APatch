@@ -204,14 +204,89 @@ enum Sepolicy {
 
 #[derive(clap::Subcommand, Debug)]
 enum NoMount {
-    /// Enable the built-in NoMount metamodule
+    /// Enable the built-in NoMount feature
     Enable,
-    /// Disable the built-in NoMount metamodule
+    /// Disable the built-in NoMount feature
     Disable,
     /// Show NoMount status
     Status,
     /// Natively inject all active module files now (no reboot needed)
     Inject,
+    /// Manage VFS path redirection rules
+    Rule {
+        #[command(subcommand)]
+        command: NoMountRule,
+    },
+    /// Manage exclusion-list UIDs
+    Uid {
+        #[command(subcommand)]
+        command: NoMountUid,
+    },
+    /// Hot load/unload one module's VFS rules
+    Module {
+        #[command(subcommand)]
+        command: NoMountModule,
+    },
+    /// Clear rules / uids / everything
+    Clear {
+        /// what to clear: all, rules, or uid
+        what: String,
+    },
+    /// Print the NoMount kernel driver version
+    Version,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountRule {
+    /// Add VFS redirection rule(s): <vpath> <rpath> [<vpath> <rpath> ...]
+    Add {
+        /// virtual path(s) followed by their real path(s)
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+        /// treat each entry as a whiteout (only vpath is given)
+        #[arg(long)]
+        whiteout: bool,
+    },
+    /// Remove VFS redirection rule(s): <vpath> [<vpath> ...]
+    Del {
+        /// virtual path(s) to remove
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// List VFS redirection rules
+    List {
+        /// output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove all VFS redirection rules
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountUid {
+    /// Add an app uid to the exclusion list
+    Add { uid: u32 },
+    /// Remove an app uid from the exclusion list
+    Del { uid: u32 },
+    /// List blocked uids (JSON array)
+    List,
+    /// Remove all blocked uids
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountModule {
+    /// Hot-inject one module's files into the VFS rules
+    Inject { id: String },
+    /// Hot-unload one module's files from the VFS rules
+    Unload { id: String },
 }
 
 pub fn run() -> Result<()> {
@@ -402,6 +477,45 @@ pub fn run() -> Result<()> {
             NoMount::Disable => nomount::disable(),
             NoMount::Status => nomount::status(),
             NoMount::Inject => nomount::inject(),
+            NoMount::Rule { command } => match command {
+                NoMountRule::Add {
+                    paths,
+                    uid,
+                    whiteout,
+                } => {
+                    let uid = uid.unwrap_or(0);
+                    if !whiteout && paths.len() % 2 != 0 {
+                        anyhow::bail!(
+                            "nomount: rule add needs an even number of <vpath> <rpath> pairs \
+                             (or --whiteout with vpaths only)"
+                        );
+                    }
+                    let rules: Vec<(String, Option<String>)> = if whiteout {
+                        paths.into_iter().map(|p| (p, None)).collect()
+                    } else {
+                        paths
+                            .chunks_exact(2)
+                            .map(|c| (c[0].clone(), Some(c[1].clone())))
+                            .collect()
+                    };
+                    nomount::rule_add(&rules, uid, whiteout)
+                }
+                NoMountRule::Del { paths, uid } => nomount::rule_del(&paths, uid.unwrap_or(0)),
+                NoMountRule::List { json } => nomount::rule_list(json),
+                NoMountRule::Clear => nomount::rule_clear(),
+            },
+            NoMount::Uid { command } => match command {
+                NoMountUid::Add { uid } => nomount::uid_add(uid),
+                NoMountUid::Del { uid } => nomount::uid_del(uid),
+                NoMountUid::List => nomount::uid_list(),
+                NoMountUid::Clear => nomount::uid_clear(),
+            },
+            NoMount::Module { command } => match command {
+                NoMountModule::Inject { id } => nomount::module_inject(&id),
+                NoMountModule::Unload { id } => nomount::module_unload(&id),
+            },
+            NoMount::Clear { what } => nomount::clear(what.as_str()),
+            NoMount::Version => nomount::version(),
         },
 
         Commands::Sepolicy(sepolicy_args) => crate::sepolicy::execute(&sepolicy_args),

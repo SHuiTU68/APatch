@@ -64,8 +64,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.bmax.apatch.R
+import me.bmax.apatch.APApplication
 import me.bmax.apatch.apApp
 import me.bmax.apatch.ui.component.SwitchItem
+import me.bmax.apatch.util.APatchCli
 import me.bmax.apatch.util.rootShellForResult
 import me.bmax.apatch.util.ui.LocalSnackbarHost
 import org.json.JSONArray
@@ -94,12 +96,11 @@ import java.util.zip.GZIPOutputStream
 
 private const val TAG = "NoMountControl"
 
-// --- Paths (mirror /apd/assets/nomount/webroot/index.js) ---
+// --- Paths (deep APatch integration: all ops go through native `apd nomount`) ---
+private const val NM_APD = "${APApplication.APD_PATH} nomount"
 private const val NM_MOD_DIR = "/data/adb/modules"
 private const val NM_DATA = "/data/adb/ap/nomount"
-private const val NM_BIN = "$NM_DATA/bin/nm"
 private const val NM_EXCLUSIONS = "$NM_DATA/.exclusion_list.json"
-private const val NM_DISABLE = "$NM_DATA/disable"
 private const val NM_TARGET_PARTITIONS =
     "system system_ext vendor odm product apex oem optics prism mi_ext my_bigball my_carrier my_company my_engineering my_heytap my_manifest my_preload my_product my_region my_reserve my_stock"
 
@@ -961,9 +962,9 @@ object NoMountApi {
             getprop ro.build.version.release; echo "|||"
             getprop ro.build.version.sdk; echo "|||"
             grep "version=" $NM_DATA/version | cut -d= -f2; echo "|||"
-            $NM_BIN version; echo "|||"
-            $NM_BIN rule list --json; echo "|||"
-            if $NM_BIN version > /dev/null 2>&1; then lsmod | grep -q nomount && echo lkm || echo built-in; fi
+            $NM_APD version; echo "|||"
+            $NM_APD rule list --json; echo "|||"
+            if $NM_APD version > /dev/null 2>&1; then lsmod | grep -q nomount && echo lkm || echo built-in; fi
         """.trimIndent()
 
         val raw = partsOf(fastCmd(script))
@@ -1003,7 +1004,7 @@ object NoMountApi {
 
     fun listModules(): List<NoMountModuleInfo> {
         val script = """
-            $NM_BIN rule list --json; echo "|||"
+            $NM_APD rule list --json; echo "|||"
             cd $NM_MOD_DIR
             for mod in *; do
                 [ ! -d "${'$'}mod" ] || [ "${'$'}mod" = "nomount" ] || [ ! -f "${'$'}mod/module.prop" ] && continue
@@ -1051,58 +1052,12 @@ object NoMountApi {
 
     /** Hot-load a module by injecting its partition files into the VFS rules. */
     fun loadModule(modId: String): Boolean {
-        val modPath = "$NM_MOD_DIR/$modId"
-        val script = """
-            cd "$modPath" || exit 0
-            valid_dirs=""
-            for p in $NM_TARGET_PARTITIONS; do [ -d "${'$'}p" ] && { [ -d "/${'$'}p" ] || [ -d "/system/${'$'}p" ]; } && valid_dirs="${'$'}valid_dirs ${'$'}p"; done
-            [ -z "${'$'}valid_dirs" ] && exit 0
-            find -L ${'$'}valid_dirs \( -type d -o -type c -o -name ".replace" \) -exec sh -c '
-                for f do
-                    v="${'$'}f"; [ "${'$'}{v#system/odm/}" != "${'$'}v" ] && v="odm/${'$'}{v#system/odm/}"
-                    if [ -d "${'$'}f" ]; then
-                        getfattr -n trusted.overlay.opaque "${'$'}f" 2>/dev/null | grep -q "=\"y\"" && printf "/%s\0" "${'$'}v"
-                    elif [ "${'$'}{f##*/}" = ".replace" ]; then
-                        printf "/%s\0" "${'$'}{v%/.replace}"
-                    else
-                        printf "/%s\0" "${'$'}v"
-                    fi
-                done
-            ' _ {} + 2>/dev/null | xargs -0 -r $NM_BIN rule add --whiteout
-
-            find -L ${'$'}valid_dirs \( -type f -o -type l \) ! -name ".replace" -exec sh -c '
-                mod="${'$'}1"; shift
-                for f do
-                    v="${'$'}f"; [ "${'$'}{v#system/odm/}" != "${'$'}v" ] && v="odm/${'$'}{v#system/odm/}"
-                    printf "/%s\0%s/%s\0" "${'$'}v" "${'$'}mod" "${'$'}f"
-                done
-            ' _ "$modPath" {} + 2>/dev/null | xargs -0 -r $NM_BIN rule add
-        """.trimIndent()
-        return shellOut(script).isSuccess
+        return shellOut("$NM_APD module inject $modId").isSuccess
     }
 
     /** Hot-unload a module by removing its rules. */
     fun unloadModule(modId: String): Boolean {
-        val modPath = "$NM_MOD_DIR/$modId"
-        val script = """
-            cd "$modPath" || exit 0
-            valid_dirs=""
-            for p in $NM_TARGET_PARTITIONS; do [ -d "${'$'}p" ] && { [ -d "/${'$'}p" ] || [ -d "/system/${'$'}p" ]; } && valid_dirs="${'$'}valid_dirs ${'$'}p"; done
-            [ -z "${'$'}valid_dirs" ] && exit 0
-            find -L ${'$'}valid_dirs \( -type f -o -type l -o -type c -o -type d \) -exec sh -c '
-                for f do
-                    v="${'$'}f"; [ "${'$'}{v#system/odm/}" != "${'$'}v" ] && v="odm/${'$'}{v#system/odm/}"
-                    if [ -d "${'$'}f" ]; then
-                        getfattr -n trusted.overlay.opaque "${'$'}f" 2>/dev/null | grep -q "=\"y\"" && printf "/%s\0" "${'$'}v"
-                    elif [ "${'$'}{f##*/}" = ".replace" ]; then
-                        printf "/%s\0" "${'$'}{v%/.replace}"
-                    else
-                        printf "/%s\0" "${'$'}v"
-                    fi
-                done
-            ' _ {} + 2>/dev/null | xargs -0 -r $NM_BIN rule del
-        """.trimIndent()
-        return shellOut(script).isSuccess
+        return shellOut("$NM_APD module unload $modId").isSuccess
     }
 
     /** Enable (mount) a module: clear the disable marker and hot-load it. */
@@ -1153,7 +1108,7 @@ object NoMountApi {
     }
 
     fun listExclusions(): List<NoMountExclusion> {
-        val stdout = fastCmd("$NM_BIN uid list 2>/dev/null")
+        val stdout = fastCmd("$NM_APD uid list 2>/dev/null")
         val blockedUids = runCatching {
             val arr = JSONArray(stdout.trim())
             List(arr.length()) { arr.getString(it) }
@@ -1168,7 +1123,7 @@ object NoMountApi {
     }
 
     fun removeExclusion(entry: NoMountExclusion) {
-        shellOut("$NM_BIN uid del ${entry.uid}")
+        shellOut("$NM_APD uid del ${entry.uid}")
         val current = readExclusionsJson()
         writeExclusionsJson(current.filter { it.uid != entry.uid })
     }
@@ -1181,21 +1136,22 @@ object NoMountApi {
         writeExclusionsJson(updated)
         if (toAdd.isNotEmpty()) {
             val uids = toAdd.joinToString(" ") { it.uid }
-            shellOut("for u in $uids; do $NM_BIN uid add ${'$'}u; done")
+            shellOut("for u in $uids; do $NM_APD uid add ${'$'}u; done")
         }
     }
 
     // -------------------------------------------------------- options ---
 
-    fun isSafeMode(): Boolean =
-        fastCmd("[ -f $NM_DISABLE ] && echo yes").contains("yes")
+    // Deep APatch integration: NoMount is fully built in, so "safe mode"
+    // collapses into the daemon's enable marker (apd nomount enable/disable).
+    // There is no separate /data/adb/ap/nomount/disable file anymore.
+    fun isSafeMode(): Boolean = !APatchCli.isNoMountEnabled()
 
-    fun setSafeMode(enabled: Boolean): Boolean =
-        shellOut(if (enabled) "touch $NM_DISABLE" else "rm $NM_DISABLE").isSuccess
+    fun setSafeMode(enabled: Boolean): Boolean = APatchCli.setNoMountEnabled(!enabled)
 
     fun clearRules(): Boolean {
         val okJson = writeExclusionsJson(emptyList())
-        val okClear = shellOut("$NM_BIN clear all").isSuccess
+        val okClear = shellOut("$NM_APD clear all").isSuccess
         return okJson && okClear
     }
 }
