@@ -325,5 +325,19 @@
     <string name="nomount_language">Language</string>
     <string name="nomount_language_desc">Select the interface language.</string>
     <string name="nomount_clear_rules">Clear all rules</string>
+    <string name="nomount_hide_rules">Hide rules</string>
+    <string name="nomount_hide_rules_desc">"Hide selected paths from apps (Kasumi-style, kprobe-free)."</string>
+    <string name="nomount_hide_rules_empty">No hide rules</string>
+    <string name="nomount_hide_add">Add hide rule</string>
+    <string name="nomount_hide_remove">Remove hide rule</string>
+    <string name="nomount_hide_clear">Clear all</string>
+    <string name="nomount_hide_path_hint">Path to hide (e.g. /data/adb/modules)</string>
+    <string name="nomount_hide_mountinfo">Mountinfo</string>
+    <string name="nomount_hide_mounts">Mounts</string>
+    <string name="nomount_hide_maps">Maps</string>
+    <string name="nomount_hide_smaps">Smaps</string>
+    <string name="nomount_hide_statfs">Statfs (f_type)</string>
+    <string name="nomount_hide_f_type_hint">f_type (decimal, 0 = off)</string>
+    <string name="nomount_hide_uid_hint">Restrict to UID (empty = all)</string>
     <string name="nomount_error">Error: %1$s</string>
 </resources>

@@ -289,5 +289,19 @@
     <string name="nomount_language">语言</string>
     <string name="nomount_language_desc">选择界面语言。</string>
     <string name="nomount_clear_rules">清除全部规则</string>
+    <string name="nomount_hide_rules">隐藏规则</string>
+    <string name="nomount_hide_rules_desc">将所选路径对应用隐藏（类 Kasumi 风格，无需 kprobe）。</string>
+    <string name="nomount_hide_rules_empty">暂无隐藏规则</string>
+    <string name="nomount_hide_add">添加隐藏规则</string>
+    <string name="nomount_hide_remove">移除隐藏规则</string>
+    <string name="nomount_hide_clear">全部清除</string>
+    <string name="nomount_hide_path_hint">要隐藏的路径（如 /data/adb/modules）</string>
+    <string name="nomount_hide_mountinfo">Mountinfo</string>
+    <string name="nomount_hide_mounts">Mounts</string>
+    <string name="nomount_hide_maps">Maps</string>
+    <string name="nomount_hide_smaps">Smaps</string>
+    <string name="nomount_hide_statfs">Statfs（f_type）</string>
+    <string name="nomount_hide_f_type_hint">f_type（十进制，0 表示关闭）</string>
+    <string name="nomount_hide_uid_hint">限制为某 UID（留空表示全部）</string>
     <string name="nomount_error">错误：%1$s</string>
 </resources>

@@ -9,6 +9,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -53,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -88,6 +90,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.ui.window.Dialog
@@ -132,6 +135,13 @@ data class NoMountExclusion(
     val pkg: String,
 )
 
+data class HideRule(
+    val path: String,
+    val kinds: List<String>,
+    val uid: String? = null,
+    val fType: Int? = null,
+)
+
 private data class PickableApp(
     val packageInfo: android.content.pm.PackageInfo,
     val label: String,
@@ -156,6 +166,8 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
     var modulesLoading by remember { mutableStateOf(true) }
     var exclusionsLoading by remember { mutableStateOf(true) }
     var showAppPicker by remember { mutableStateOf(false) }
+    var hideRules by remember { mutableStateOf<List<HideRule>>(emptyList()) }
+    var showHideRuleDialog by remember { mutableStateOf(false) }
 
     val tabs = listOf(
         stringResource(R.string.nomount_tab_home),
@@ -191,11 +203,16 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
         optionsLoaded = true
     }
 
+    suspend fun refreshHideRules() {
+        hideRules = withContext(Dispatchers.IO) { NoMountApi.listHideRules() }
+    }
+
     suspend fun refreshAll() {
         refreshHome()
         refreshModules()
         refreshExclusions()
         refreshOptions()
+        refreshHideRules()
     }
 
     LaunchedEffect(Unit) {
@@ -303,6 +320,7 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
                 3 -> OptionsTab(
                     safeMode = safeMode,
                     loaded = optionsLoaded,
+                    hideRules = hideRules,
                     onSafeModeChange = { enabled ->
                         scope.launch {
                             val ok = withContext(Dispatchers.IO) { NoMountApi.setSafeMode(enabled) }
@@ -315,6 +333,28 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
                             if (ok) {
                                 toast(context.getString(R.string.success))
                                 refreshAll()
+                            } else {
+                                toast(context.getString(R.string.failure))
+                            }
+                        }
+                    },
+                    onAddRule = { showHideRuleDialog = true },
+                    onRemoveRule = { rule ->
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) { NoMountApi.delHideRule(rule) }
+                            if (ok) {
+                                hideRules = withContext(Dispatchers.IO) { NoMountApi.listHideRules() }
+                            } else {
+                                toast(context.getString(R.string.failure))
+                            }
+                        }
+                    },
+                    onClearHideRules = {
+                        scope.launch {
+                            val ok = withContext(Dispatchers.IO) { NoMountApi.clearHideRules() }
+                            if (ok) {
+                                toast(context.getString(R.string.success))
+                                hideRules = withContext(Dispatchers.IO) { NoMountApi.listHideRules() }
                             } else {
                                 toast(context.getString(R.string.failure))
                             }
@@ -337,6 +377,24 @@ fun NoMountControlScreen(navigator: DestinationsNavigator) {
                     exclusions = withContext(Dispatchers.IO) { NoMountApi.listExclusions() }
                 }
                 showAppPicker = false
+            }
+        )
+    }
+
+    if (showHideRuleDialog) {
+        HideRuleDialog(
+            onDismiss = { showHideRuleDialog = false },
+            onAdd = { rule ->
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { NoMountApi.addHideRule(rule) }
+                    if (ok) {
+                        toast(context.getString(R.string.success))
+                        hideRules = withContext(Dispatchers.IO) { NoMountApi.listHideRules() }
+                    } else {
+                        toast(context.getString(R.string.failure))
+                    }
+                }
+                showHideRuleDialog = false
             }
         )
     }
@@ -704,12 +762,17 @@ private fun ExclusionsTab(
 private fun OptionsTab(
     safeMode: Boolean,
     loaded: Boolean,
+    hideRules: List<HideRule>,
     onSafeModeChange: (Boolean) -> Unit,
     onClearRules: () -> Unit,
+    onAddRule: () -> Unit,
+    onRemoveRule: (HideRule) -> Unit,
+    onClearHideRules: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp)
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
             Card {
@@ -747,6 +810,94 @@ private fun OptionsTab(
                     )
                 }
             }
+        }
+        item {
+            Card {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = stringResource(R.string.nomount_hide_rules),
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = stringResource(R.string.nomount_hide_rules_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    HorizontalDivider()
+                    if (hideRules.isEmpty()) {
+                        Text(
+                            text = stringResource(R.string.nomount_hide_rules_empty),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(16.dp)
+                        )
+                    } else {
+                        hideRules.forEachIndexed { index, rule ->
+                            HideRuleRow(rule = rule, onRemove = { onRemoveRule(rule) })
+                            if (index != hideRules.lastIndex) {
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                    HorizontalDivider()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Button(
+                            onClick = onAddRule,
+                            content = { Text(text = stringResource(R.string.nomount_hide_add)) }
+                        )
+                        Spacer(Modifier.weight(1f))
+                        TextButton(
+                            onClick = onClearHideRules,
+                            content = { Text(text = stringResource(R.string.nomount_hide_clear)) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HideRuleRow(rule: HideRule, onRemove: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = rule.path,
+                style = MaterialTheme.typography.titleMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = buildString {
+                    append(rule.kinds.joinToString(", "))
+                    rule.uid?.let { append(" · UID: $it") }
+                    rule.fType?.let { append(" · f_type: $it") }
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        IconButton(onClick = onRemove) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = stringResource(R.string.nomount_hide_remove),
+                tint = MaterialTheme.colorScheme.error
+            )
         }
     }
 }
@@ -898,18 +1049,11 @@ private fun AppPickerDialog(
                                 .clip(RoundedCornerShape(9.dp))
                         )
                         Spacer(Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(text = app.label, style = MaterialTheme.typography.titleMedium)
-                            Text(
-                                text = app.packageInfo.packageName,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
                         Text(
                             text = "UID: ${app.uid}",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
                         )
                         if (!isExisting) {
                             Button(
@@ -939,6 +1083,127 @@ private fun AppPickerDialog(
         }
             }
         }
+    }
+}
+
+// ---------------------------------------------------------- Hide Dialog ---
+
+@Composable
+private fun HideRuleDialog(
+    onDismiss: () -> Unit,
+    onAdd: (HideRule) -> Unit,
+) {
+    var path by remember { mutableStateOf("") }
+    var mountinfo by remember { mutableStateOf(true) }
+    var mounts by remember { mutableStateOf(true) }
+    var maps by remember { mutableStateOf(false) }
+    var smaps by remember { mutableStateOf(false) }
+    var statfs by remember { mutableStateOf(false) }
+    var fType by remember { mutableStateOf("") }
+    var uid by remember { mutableStateOf("") }
+
+    BackHandler { onDismiss() }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            shape = RoundedCornerShape(28.dp),
+            color = MaterialTheme.colorScheme.surface,
+            tonalElevation = 6.dp,
+            modifier = Modifier.fillMaxWidth().padding(16.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = stringResource(R.string.nomount_hide_add),
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                TextField(
+                    value = path,
+                    onValueChange = { path = it },
+                    label = { Text(stringResource(R.string.nomount_hide_path_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(8.dp))
+                HideKindRow(stringResource(R.string.nomount_hide_mountinfo), mountinfo) { mountinfo = it }
+                HideKindRow(stringResource(R.string.nomount_hide_mounts), mounts) { mounts = it }
+                HideKindRow(stringResource(R.string.nomount_hide_maps), maps) { maps = it }
+                HideKindRow(stringResource(R.string.nomount_hide_smaps), smaps) { smaps = it }
+                HideKindRow(stringResource(R.string.nomount_hide_statfs), statfs) { statfs = it }
+                if (statfs) {
+                    TextField(
+                        value = fType,
+                        onValueChange = { fType = it.filter { c -> c.isDigit() } },
+                        label = { Text(stringResource(R.string.nomount_hide_f_type_hint)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+                TextField(
+                    value = uid,
+                    onValueChange = { uid = it.filter { c -> c.isDigit() } },
+                    label = { Text(stringResource(R.string.nomount_hide_uid_hint)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(onClick = onDismiss) {
+                        Text(text = stringResource(android.R.string.cancel))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Button(
+                        onClick = {
+                            val kinds = mutableListOf<String>()
+                            if (mountinfo) kinds.add("mountinfo")
+                            if (mounts) kinds.add("mounts")
+                            if (maps) kinds.add("maps")
+                            if (smaps) kinds.add("smaps")
+                            if (statfs) kinds.add("statfs")
+                            val p = path.trim()
+                            if (p.isNotEmpty() && kinds.isNotEmpty()) {
+                                onAdd(
+                                    HideRule(
+                                        path = p,
+                                        kinds = kinds,
+                                        uid = uid.trim().takeIf { it.isNotEmpty() && it != "0" },
+                                        fType = fType.trim().toIntOrNull()?.takeIf { it > 0 },
+                                    )
+                                )
+                            }
+                        },
+                        content = {
+                            Text(text = stringResource(R.string.nomount_hide_add))
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HideKindRow(title: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyLarge,
+            modifier = Modifier.weight(1f)
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
@@ -1158,4 +1423,50 @@ object NoMountApi {
         val okClear = shellOut("$NM_APD clear all").isSuccess
         return okJson && okClear
     }
+
+    // ------------------------------------------------------ hide rules ---
+
+    fun listHideRules(): List<HideRule> {
+        val stdout = fastCmd("$NM_APD hide list --json")
+        return runCatching {
+            val arr = JSONArray(stdout.trim())
+            List(arr.length()) { i ->
+                val obj = arr.optJSONObject(i)
+                val kinds = runCatching {
+                    val ja = obj?.optJSONArray("hide")
+                    if (ja == null) emptyList() else List(ja.length()) { ja.getString(it) }
+                }.getOrDefault(emptyList())
+                HideRule(
+                    path = obj?.optString("path") ?: "",
+                    kinds = kinds,
+                    uid = obj?.optString("uid")?.takeIf { it.isNotEmpty() && it != "0" },
+                    fType = obj?.optInt("f_type")?.takeIf { it > 0 },
+                )
+            }.filter { it.path.isNotEmpty() }
+        }.getOrDefault(emptyList())
+    }
+
+    fun addHideRule(rule: HideRule): Boolean {
+        val kinds = rule.kinds.filter { it in setOf("mountinfo", "mounts", "maps", "smaps", "statfs") }
+        if (kinds.isEmpty() || rule.path.isBlank()) return false
+        val cmd = buildString {
+            append("$NM_APD hide add")
+            kinds.forEach { append(" --$it") }
+            rule.fType?.takeIf { it > 0 }?.let { append(" --f_type $it") }
+            rule.uid?.takeIf { it.isNotEmpty() && it != "0" }?.let { append(" --uid $it") }
+            append(" ${rule.path}")
+        }
+        return shellOut(cmd).isSuccess
+    }
+
+    fun delHideRule(rule: HideRule): Boolean {
+        val cmd = buildString {
+            append("$NM_APD hide del")
+            rule.uid?.takeIf { it.isNotEmpty() && it != "0" }?.let { append(" --uid $it") }
+            append(" ${rule.path}")
+        }
+        return shellOut(cmd).isSuccess
+    }
+
+    fun clearHideRules(): Boolean = shellOut("$NM_APD hide clear").isSuccess
 }
