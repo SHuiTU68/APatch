@@ -15,7 +15,6 @@
 
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::Path,
 };
 

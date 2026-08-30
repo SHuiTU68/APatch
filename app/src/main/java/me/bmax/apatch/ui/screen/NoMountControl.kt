@@ -97,7 +97,7 @@ private const val TAG = "NoMountControl"
 // --- Paths (mirror /apd/assets/nomount/webroot/index.js) ---
 private const val NM_MOD_DIR = "/data/adb/modules"
 private const val NM_DATA = "/data/adb/ap/nomount"
-private const val NM_BIN = "$NM_MOD_DIR/nomount/bin/nm"
+private const val NM_BIN = "$NM_DATA/bin/nm"
 private const val NM_EXCLUSIONS = "$NM_DATA/.exclusion_list.json"
 private const val NM_DISABLE = "$NM_DATA/disable"
 private const val NM_TARGET_PARTITIONS =
@@ -960,7 +960,7 @@ object NoMountApi {
             getprop ro.product.vendor.model; [ -z "${'$'}(getprop ro.product.vendor.model)" ] && getprop ro.product.model; echo "|||"
             getprop ro.build.version.release; echo "|||"
             getprop ro.build.version.sdk; echo "|||"
-            grep "version=" $NM_MOD_DIR/nomount/module.prop | cut -d= -f2; echo "|||"
+            grep "version=" $NM_DATA/version | cut -d= -f2; echo "|||"
             $NM_BIN version; echo "|||"
             $NM_BIN rule list --json; echo "|||"
             if $NM_BIN version > /dev/null 2>&1; then lsmod | grep -q nomount && echo lkm || echo built-in; fi
