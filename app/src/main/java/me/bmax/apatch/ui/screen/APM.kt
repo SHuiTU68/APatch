@@ -246,6 +246,13 @@ private fun getMetaModuleWarningText(
     viewModel: APModuleViewModel,
     context: Context
 ) : String? {
+    // Built-in NoMount is toggle-controlled from settings, not a user-installed
+    // metamodule. Never show the metamodule warning for it, even when the toggle
+    // is off (the module dir stays on disk with a disable marker).
+    if (SuFile.open("/data/adb/modules/nomount/module.prop").isFile) {
+        return null
+    }
+
     val needsMountModule = viewModel.moduleList.any { module ->
         val moduleDir = "/data/adb/modules/${module.id}"
 
