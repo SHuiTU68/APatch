@@ -11,19 +11,24 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.InstallMobile
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.MoreVert
@@ -32,9 +37,10 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Cached
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Clear
 import androidx.compose.material.icons.outlined.InstallMobile
 import androidx.compose.material.icons.outlined.SystemUpdate
+import androidx.compose.material.icons.rounded.CheckCircleOutline
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -48,6 +54,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
@@ -57,8 +64,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.dropUnlessResumed
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.NavGraphs
 import com.ramcosta.composedestinations.generated.destinations.AboutScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.APModuleScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.InstallModeSelectScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.KPModuleScreenDestination
 import com.ramcosta.composedestinations.generated.destinations.PatchesDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +82,7 @@ import me.bmax.apatch.ui.component.WarningCard
 import me.bmax.apatch.ui.component.rememberConfirmDialog
 import me.bmax.apatch.ui.theme.blurEffect
 import me.bmax.apatch.ui.theme.getAppBarColor
+import me.bmax.apatch.ui.theme.isInDarkTheme
 import me.bmax.apatch.ui.theme.rememberBlurBackdrop
 import me.bmax.apatch.ui.theme.withBackdrop
 import me.bmax.apatch.ui.viewmodel.PatchesViewModel
@@ -83,9 +94,11 @@ import me.bmax.apatch.util.getSELinuxStatus
 import me.bmax.apatch.util.installJailbreak
 import me.bmax.apatch.util.isJailbreakMode
 import me.bmax.apatch.util.isSELinuxPermissive
+import me.bmax.apatch.util.listModules
 import me.bmax.apatch.util.migrateStockBootBackup
 import me.bmax.apatch.util.reboot
 import me.bmax.apatch.util.softReboot
+import org.json.JSONArray
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
@@ -100,6 +113,8 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TopAppBar
 import top.yukonga.miuix.kmp.menu.OverlayIconDropdownMenu
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.MiuixTheme.isDynamicColor
+import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import top.yukonga.miuix.kmp.window.WindowDialog
 
 private val managerVersion = getManagerVersion()
@@ -115,6 +130,18 @@ fun HomeScreen(navigator: DestinationsNavigator) {
     // install; see migrateStockBootBackup.
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { migrateStockBootBackup() }
+    }
+
+    // Module counts for the KStatusCard quick cards (same data source as the module lists).
+    val apmCount by produceState(initialValue = 0) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { JSONArray(listModules()).length() }.getOrDefault(0)
+        }
+    }
+    val kpmCount by produceState(initialValue = 0) {
+        value = withContext(Dispatchers.IO) {
+            Natives.kernelPatchModuleNum().toInt().coerceAtLeast(0)
+        }
     }
 
     Scaffold(topBar = {
@@ -137,7 +164,27 @@ fun HomeScreen(navigator: DestinationsNavigator) {
         ) {
             Spacer(Modifier.height(0.dp))
             WarningCard()
-            KStatusCard(kpState, apState, navigator)
+            KStatusCard(
+                kpState = kpState,
+                apState = apState,
+                apmCount = apmCount,
+                kpmCount = kpmCount,
+                onApmClick = {
+                    navigator.navigate(APModuleScreenDestination) {
+                        popUpTo(NavGraphs.root) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                onKpmClick = {
+                    navigator.navigate(KPModuleScreenDestination) {
+                        popUpTo(NavGraphs.root) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
+                },
+                navigator = navigator
+            )
             if (kpState != APApplication.State.UNKNOWN_STATE && apState != APApplication.State.ANDROIDPATCH_INSTALLED) {
                 AStatusCard(apState)
             }
@@ -301,9 +348,14 @@ private fun TopBar(
 
 @Composable
 private fun KStatusCard(
-    kpState: APApplication.State, apState: APApplication.State, navigator: DestinationsNavigator
+    kpState: APApplication.State,
+    apState: APApplication.State,
+    apmCount: Int,
+    kpmCount: Int,
+    onApmClick: () -> Unit,
+    onKpmClick: () -> Unit,
+    navigator: DestinationsNavigator
 ) {
-
     val showUninstallDialog = remember { mutableStateOf(false) }
     if (showUninstallDialog.value) {
         UninstallDialog(showDialog = showUninstallDialog, navigator)
@@ -323,217 +375,233 @@ private fun KStatusCard(
     val jailbreakFailedMsg = stringResource(R.string.settings_jailbreak_failed)
     val jailbreakTriggeredMsg = stringResource(R.string.jailbreak_triggered)
 
-    val cardBackgroundColor = when {
-        isJailbreak -> MiuixTheme.colorScheme.tertiaryContainer
+    val isKpInstalled = kpState == APApplication.State.KERNELPATCH_INSTALLED
+    val isKpNeedUpdate = kpState == APApplication.State.KERNELPATCH_NEED_UPDATE
+    val isKpNeedReboot = kpState == APApplication.State.KERNELPATCH_NEED_REBOOT
+    val isKpUninstalling = kpState == APApplication.State.KERNELPATCH_UNINSTALLING
+    val isKpUnknown = kpState == APApplication.State.UNKNOWN_STATE
 
-        kpState == APApplication.State.KERNELPATCH_INSTALLED -> {
-            MiuixTheme.colorScheme.primary
-        }
+    val mainCardOnClick = {
+        when {
+            isJailbreak -> softReboot()
+            isKpUnknown -> navigator.navigate(InstallModeSelectScreenDestination)
+            isKpNeedUpdate -> {
+                // todo: remove legacy compact for kp < 0.9.0
+                if (Version.installedKPVUInt() < 0x900u) {
+                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
+                } else {
+                    navigator.navigate(InstallModeSelectScreenDestination)
+                }
+            }
 
-        kpState == APApplication.State.KERNELPATCH_NEED_UPDATE || kpState == APApplication.State.KERNELPATCH_NEED_REBOOT -> {
-            MiuixTheme.colorScheme.secondary
-        }
-
-        else -> {
-            MiuixTheme.colorScheme.secondaryContainer
+            isKpNeedReboot -> reboot()
+            isKpUninstalling -> { /* Do nothing */ }
+            else -> {
+                if (apState == APApplication.State.ANDROIDPATCH_INSTALLED ||
+                    apState == APApplication.State.ANDROIDPATCH_NEED_UPDATE
+                ) {
+                    showUninstallDialog.value = true
+                } else {
+                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.UNPATCH))
+                }
+            }
         }
     }
 
-    Card(
-        onClick = {
-            if (!isJailbreak && kpState != APApplication.State.KERNELPATCH_INSTALLED) {
-                navigator.navigate(InstallModeSelectScreenDestination)
-            }
-        },
-        colors = CardDefaults.defaultColors(color = cardBackgroundColor)
-    ) {
-        Column(
+    Column {
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (!isJailbreak && kpState == APApplication.State.KERNELPATCH_NEED_UPDATE) {
-                Row {
-                    Text(
-                        text = stringResource(R.string.kernel_patch),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
-            }
-            Row(
+            Card(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .weight(1f)
+                    .fillMaxHeight(),
+                colors = CardDefaults.defaultColors(
+                    color = when {
+                        isJailbreak -> MiuixTheme.colorScheme.tertiaryContainer
+                        isKpNeedUpdate || isKpNeedReboot -> MiuixTheme.colorScheme.errorContainer
+                        isKpUnknown -> MiuixTheme.colorScheme.surfaceVariant
+                        isDynamicColor -> MiuixTheme.colorScheme.secondaryContainer
+                        isInDarkTheme(0) -> Color(0xFF1A3825)
+                        else -> Color(0xFFDFFAE4)
+                    }
+                ),
+                onClick = mainCardOnClick,
+                pressFeedbackType = PressFeedbackType.Tilt
             ) {
-                when {
-                    isJailbreak -> {
-                        Icon(Icons.Filled.LockOpen, stringResource(R.string.settings_jailbreak_mode))
+                Box(modifier = Modifier.fillMaxSize()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .offset(38.dp, 45.dp),
+                        contentAlignment = Alignment.BottomEnd
+                    ) {
+                        Icon(
+                            modifier = Modifier.size(170.dp),
+                            imageVector = when {
+                                isJailbreak -> Icons.Filled.LockOpen
+                                isKpNeedUpdate || isKpNeedReboot -> Icons.Rounded.ErrorOutline
+                                isKpUnknown -> Icons.AutoMirrored.Outlined.HelpOutline
+                                else -> Icons.Rounded.CheckCircleOutline
+                            },
+                            tint = when {
+                                isJailbreak -> MiuixTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.6f)
+                                isKpNeedUpdate || isKpNeedReboot -> MiuixTheme.colorScheme.error.copy(alpha = 0.6f)
+                                isKpUnknown -> MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.4f)
+                                isDynamicColor -> MiuixTheme.colorScheme.primary.copy(alpha = 0.8f)
+                                else -> Color(0xFF36D167)
+                            },
+                            contentDescription = null
+                        )
                     }
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(all = 16.dp)
+                    ) {
+                        Text(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = when {
+                                isJailbreak -> stringResource(R.string.settings_jailbreak_mode)
+                                isKpInstalled || isKpUninstalling -> stringResource(R.string.home_working)
+                                isKpNeedUpdate || isKpNeedReboot -> stringResource(R.string.home_need_update)
+                                else -> stringResource(R.string.home_install_unknown)
+                            },
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onSurface
+                        )
 
-                    kpState == APApplication.State.KERNELPATCH_INSTALLED -> {
-                        Icon(Icons.Filled.CheckCircle, stringResource(R.string.home_working))
-                    }
-
-                    kpState == APApplication.State.KERNELPATCH_NEED_UPDATE || kpState == APApplication.State.KERNELPATCH_NEED_REBOOT -> {
-                        Icon(Icons.Outlined.SystemUpdate, stringResource(R.string.home_need_update))
-                    }
-
-                    else -> {
-                        Icon(Icons.AutoMirrored.Outlined.HelpOutline, "Unknown")
-                    }
-                }
-                Column(
-                    Modifier
-                        .weight(2f)
-                        .padding(start = 16.dp, end = 1.dp)
-                ) {
-                    when {
-                        isJailbreak -> {
-                            Text(
-                                text = stringResource(R.string.settings_jailbreak_mode),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
+                        Spacer(Modifier.height(2.dp))
+                        when {
+                            isJailbreak -> Text(
+                                modifier = Modifier.fillMaxWidth(),
                                 text = stringResource(R.string.settings_jailbreak_mode_summary),
-                                fontSize = 14.sp
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                             )
-                        }
 
-                        kpState == APApplication.State.KERNELPATCH_INSTALLED -> {
-                            Text(
-                                text = stringResource(R.string.home_working),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium
+                            isKpInstalled -> Text(
+                                modifier = Modifier.fillMaxWidth(),
+                                text = "${Version.installedKPVString()} (${managerVersion.second}) - " +
+                                    if (apState != APApplication.State.ANDROIDPATCH_NOT_INSTALLED) "Full" else "KernelPatch",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onSurface
                             )
-                        }
 
-                        kpState == APApplication.State.KERNELPATCH_NEED_UPDATE || kpState == APApplication.State.KERNELPATCH_NEED_REBOOT -> {
-                            Text(
-                                text = stringResource(R.string.home_need_update),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(
+                            isKpNeedUpdate || isKpNeedReboot -> Text(
+                                modifier = Modifier.fillMaxWidth(),
                                 text = stringResource(
                                     R.string.kpatch_version_update,
                                     Version.installedKPVString(),
                                     Version.buildKPVString()
-                                ), fontSize = 14.sp
+                                ),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onSurface
                             )
-                        }
 
-                        else -> {
-                            Text(
-                                text = stringResource(R.string.home_install_unknown),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.Medium
-                            )
-                            Text(
+                            isKpUninstalling -> { /* busy, no extra line */ }
+                            else -> Text(
+                                modifier = Modifier.fillMaxWidth(),
                                 text = stringResource(R.string.home_install_unknown_summary),
-                                fontSize = 14.sp
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MiuixTheme.colorScheme.onSurfaceVariantSummary
                             )
                         }
-                    }
-                    if (!isJailbreak && kpState != APApplication.State.UNKNOWN_STATE && kpState != APApplication.State.KERNELPATCH_NEED_UPDATE && kpState != APApplication.State.KERNELPATCH_NEED_REBOOT) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            text = "${Version.installedKPVString()} (${managerVersion.second}) - " + if (apState != APApplication.State.ANDROIDPATCH_NOT_INSTALLED) "Full" else "KernelPatch",
-                            fontSize = 14.sp
-                        )
-                    }
-                }
-
-                Column(
-                    modifier = Modifier.align(Alignment.CenterVertically)
-                ) {
-                    Button(onClick = {
-                        when {
-                            isJailbreak -> {
-                                softReboot()
-                            }
-
-                            kpState == APApplication.State.UNKNOWN_STATE -> {
-                                navigator.navigate(InstallModeSelectScreenDestination)
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_NEED_UPDATE -> {
-                                // todo: remove legacy compact for kp < 0.9.0
-                                if (Version.installedKPVUInt() < 0x900u) {
-                                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
-                                } else {
-                                    navigator.navigate(InstallModeSelectScreenDestination)
-                                }
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_NEED_REBOOT -> {
-                                reboot()
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_UNINSTALLING -> {
-                                // Do nothing
-                            }
-
-                            else -> {
-                                if (apState == APApplication.State.ANDROIDPATCH_INSTALLED || apState == APApplication.State.ANDROIDPATCH_NEED_UPDATE) {
-                                    showUninstallDialog.value = true
-                                } else {
-                                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.UNPATCH))
-                                }
-                            }
-                        }
-                    }, content = {
-                        when {
-                            isJailbreak -> {
-                                Text(text = stringResource(id = R.string.reboot_soft))
-                            }
-
-                            kpState == APApplication.State.UNKNOWN_STATE -> {
-                                Text(text = stringResource(id = R.string.home_ap_cando_install))
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_NEED_UPDATE -> {
-                                Text(text = stringResource(id = R.string.home_ap_cando_update))
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_NEED_REBOOT -> {
-                                Text(text = stringResource(id = R.string.home_ap_cando_reboot))
-                            }
-
-                            kpState == APApplication.State.KERNELPATCH_UNINSTALLING -> {
-                                Icon(Icons.Outlined.Cached, contentDescription = "busy")
-                            }
-
-                            else -> {
-                                Text(text = stringResource(id = R.string.home_ap_cando_uninstall))
-                            }
-                        }
-                    })
-
-                    if (kpState == APApplication.State.UNKNOWN_STATE && isPermissive) {
-                        Spacer(Modifier.height(8.dp))
-                        Button(onClick = {
-                            scope.launch {
-                                val success = installJailbreak()
-                                if (success) {
-                                    Toast.makeText(context, jailbreakTriggeredMsg, Toast.LENGTH_SHORT)
-                                        .show()
-                                } else {
-                                    Toast.makeText(context, jailbreakFailedMsg, Toast.LENGTH_SHORT)
-                                        .show()
-                                }
-                            }
-                        }, content = {
-                            Text(stringResource(R.string.jailbreak))
-                        })
                     }
                 }
             }
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+            ) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    insideMargin = PaddingValues(16.dp),
+                    onClick = onApmClick,
+                    showIndication = true,
+                    pressFeedbackType = PressFeedbackType.Tilt
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = stringResource(R.string.apm),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        Text(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = apmCount.toString(),
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    insideMargin = PaddingValues(16.dp),
+                    onClick = onKpmClick,
+                    showIndication = true,
+                    pressFeedbackType = PressFeedbackType.Tilt
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.Start
+                    ) {
+                        Text(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = stringResource(R.string.kpm),
+                            fontWeight = FontWeight.Medium,
+                            fontSize = 15.sp,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                        Text(
+                            modifier = Modifier.fillMaxWidth(),
+                            text = kpmCount.toString(),
+                            fontSize = 26.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (isKpUnknown && isPermissive) {
+            Spacer(Modifier.height(12.dp))
+            Button(onClick = {
+                scope.launch {
+                    val success = installJailbreak()
+                    if (success) {
+                        Toast.makeText(context, jailbreakTriggeredMsg, Toast.LENGTH_SHORT)
+                            .show()
+                    } else {
+                        Toast.makeText(context, jailbreakFailedMsg, Toast.LENGTH_SHORT)
+                            .show()
+                    }
+                }
+            }, content = {
+                Text(stringResource(R.string.jailbreak))
+            })
         }
     }
 }

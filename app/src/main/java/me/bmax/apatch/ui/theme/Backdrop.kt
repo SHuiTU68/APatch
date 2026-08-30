@@ -26,9 +26,10 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 // Globally observable settings — backed by SharedPreferences,
 // updated by the Settings page, read via CompositionLocal.
 var blurEnabled by mutableStateOf(true)
+var pageScale by mutableStateOf(1.0f)
 
 val LocalEnableBlur = compositionLocalOf { blurEnabled }
-val LocalPageScale = compositionLocalOf { 1.0f }
+val LocalPageScale = compositionLocalOf { pageScale }
 
 /**
  * Remember a LayerBackdrop with a solid background to prevent alpha-blending artifacts.

@@ -7,8 +7,8 @@ import android.util.Log
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.StringRes
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -18,22 +18,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
-import androidx.compose.material.icons.filled.ColorLens
 import androidx.compose.material.icons.filled.Commit
-import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Engineering
 import androidx.compose.material.icons.automirrored.filled.FeaturedPlayList
 import androidx.compose.material.icons.filled.AltRoute
+import androidx.compose.material.icons.filled.BlurOn
+import androidx.compose.material.icons.filled.CleaningServices
 import androidx.compose.material.icons.filled.FormatColorFill
-import androidx.compose.material.icons.filled.InvertColors
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
@@ -46,12 +45,15 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
@@ -62,6 +64,9 @@ import androidx.core.content.edit
 import androidx.core.os.LocaleListCompat
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.destinations.AboutScreenDestination
+import com.ramcosta.composedestinations.generated.destinations.NoMountControlScreenDestination
+import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -69,11 +74,17 @@ import me.bmax.apatch.APApplication
 import me.bmax.apatch.BuildConfig
 import me.bmax.apatch.Natives
 import me.bmax.apatch.R
-import me.bmax.apatch.ui.WebUIActivity
+import me.bmax.apatch.apApp
 import me.bmax.apatch.ui.component.ArrowItem
+import me.bmax.apatch.ui.component.DropdownItem
 import me.bmax.apatch.ui.component.SwitchItem
 import me.bmax.apatch.ui.component.rememberLoadingDialog
-import me.bmax.apatch.ui.theme.refreshTheme
+import me.bmax.apatch.ui.theme.LocalPageScale
+import me.bmax.apatch.ui.theme.blurEnabled
+import me.bmax.apatch.ui.theme.pageScale
+import me.bmax.apatch.util.calculateCacheSize
+import me.bmax.apatch.util.clearAppCache
+import me.bmax.apatch.util.formatSize
 import me.bmax.apatch.util.getBugreportFile
 import me.bmax.apatch.util.getKernelVersionCode
 import me.bmax.apatch.util.isGkiKernel
@@ -87,24 +98,25 @@ import me.bmax.apatch.util.ui.LocalSnackbarHost
 import me.bmax.apatch.util.ui.NavigationBarsSpacer
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-import java.util.Locale
-import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Scaffold
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
+import top.yukonga.miuix.kmp.basic.Slider
 import top.yukonga.miuix.kmp.basic.SnackbarHost
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.basic.TopAppBar
+import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.window.WindowBottomSheet
 import top.yukonga.miuix.kmp.window.WindowDialog
 
 @Destination<RootGraph>
 @Composable
-fun SettingScreen() {
+fun SettingScreen(navigator: DestinationsNavigator) {
     val state by APApplication.apStateLiveData.observeAsState(APApplication.State.UNKNOWN_STATE)
     val kPatchReady = state != APApplication.State.UNKNOWN_STATE
     val aPatchReady =
@@ -148,24 +160,28 @@ fun SettingScreen() {
 
         val loadingDialog = rememberLoadingDialog()
 
-        val showLanguageDialog = rememberSaveable { mutableStateOf(false) }
-        LanguageDialog(showLanguageDialog)
-
         val showResetSuPathDialog = remember { mutableStateOf(false) }
         if (showResetSuPathDialog.value) {
             ResetSUPathDialog(showResetSuPathDialog)
         }
 
-        val showThemeChooseDialog = remember { mutableStateOf(false) }
-        if (showThemeChooseDialog.value) {
-            ThemeChooseDialog(showThemeChooseDialog)
-        }
-
         var showLogBottomSheet by remember { mutableStateOf(false) }
         val saveLog = stringResource(R.string.save_log)
-
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
+        var cacheSize by remember { mutableStateOf(0L) }
+        val showClearCacheDialog = remember { mutableStateOf(false) }
+        if (showClearCacheDialog.value) {
+            ClearCacheDialog(
+                showDialog = showClearCacheDialog,
+                cacheSize = cacheSize,
+                onCleared = {
+                    scope.launch {
+                        cacheSize = withContext(Dispatchers.IO) { calculateCacheSize(context) }
+                    }
+                }
+            )
+        }
         val logSavedMessage = stringResource(R.string.log_saved)
         val exportBugreportLauncher = rememberLauncherForActivityResult(
             ActivityResultContracts.CreateDocument("application/gzip")
@@ -191,10 +207,10 @@ fun SettingScreen() {
                 .verticalScroll(rememberScrollState()),
         ) {
 
-            val context = LocalContext.current
-            val scope = rememberCoroutineScope()
             val prefs = APApplication.sharedPreferences
 
+            // All settings live inside a single card, matching upstream APatch's Miuix UI.
+            Card {
             // Global mount
             if (kPatchReady && aPatchReady) {
                 SwitchItem(
@@ -237,19 +253,12 @@ fun SettingScreen() {
                             }
                         }
                     })
-                // NoMount WebUI control panel: built-in module, load its webroot
-                // directly through the same WebUI loader used for AP modules.
+                // NoMount control panel: native Compose page (replaces the WebUI)
                 ArrowItem(
                     icon = Icons.Filled.Web,
-                    title = stringResource(id = R.string.settings_nomount_webui),
-                    summary = stringResource(id = R.string.settings_nomount_webui_summary),
-                    onClick = {
-                        context.startActivity(
-                            Intent(context, WebUIActivity::class.java)
-                                .putExtra("id", "nomount")
-                                .putExtra("name", "NoMount")
-                        )
-                    })
+                    title = stringResource(id = R.string.nomount_control_entry),
+                    summary = stringResource(id = R.string.nomount_control_entry_summary),
+                    onClick = { navigator.navigate(NoMountControlScreenDestination) })
             }
 
             // Legacy sucompat (path_probe) support
@@ -378,77 +387,124 @@ fun SettingScreen() {
                 checkUpdate = it
             }
 
-            // Night Mode Follow System
-            var nightFollowSystem by rememberSaveable {
-                mutableStateOf(
-                    prefs.getBoolean("night_mode_follow_sys", true)
+            // Blur Effects (API 33+ only)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                var blurEnabledPref by rememberSaveable {
+                    mutableStateOf(prefs.getBoolean("blur_enabled", true))
+                }
+                SwitchItem(
+                    icon = Icons.Filled.BlurOn,
+                    title = stringResource(R.string.settings_blur_enabled),
+                    summary = stringResource(R.string.settings_blur_enabled_summary),
+                    checked = blurEnabledPref,
+                    onCheckedChange = { enabled ->
+                        prefs.edit { putBoolean("blur_enabled", enabled) }
+                        blurEnabledPref = enabled
+                        blurEnabled = enabled
+                    }
                 )
             }
-            SwitchItem(
-                icon = Icons.Filled.InvertColors,
-                title = stringResource(id = R.string.settings_night_mode_follow_sys),
-                summary = stringResource(id = R.string.settings_night_mode_follow_sys_summary),
-                checked = nightFollowSystem
-            ) {
-                prefs.edit { putBoolean("night_mode_follow_sys", it) }
-                nightFollowSystem = it
-                refreshTheme.value = true
+
+            // Page Scale
+            var showScaleSlider by remember { mutableStateOf(false) }
+            val currentPageScale = LocalPageScale.current
+            var sliderValue by remember(currentPageScale) { mutableFloatStateOf(currentPageScale) }
+            ArrowPreference(
+                title = stringResource(R.string.settings_page_scale),
+                summary = stringResource(R.string.settings_page_scale_summary),
+                startAction = {
+                    Icon(
+                        imageVector = Icons.Filled.ZoomIn,
+                        modifier = Modifier.padding(end = 6.dp),
+                        contentDescription = stringResource(R.string.settings_page_scale),
+                        tint = MiuixTheme.colorScheme.onBackground
+                    )
+                },
+                endActions = {
+                    Text(
+                        text = "${(currentPageScale * 100).toInt()}%",
+                        color = MiuixTheme.colorScheme.onSurfaceVariantActions
+                    )
+                },
+                onClick = { showScaleSlider = !showScaleSlider },
+                holdDownState = showScaleSlider,
+                bottomAction = {
+                    Slider(
+                        value = sliderValue,
+                        onValueChange = { sliderValue = it },
+                        onValueChangeFinished = {
+                            prefs.edit { putFloat("page_scale", sliderValue) }
+                            pageScale = sliderValue
+                        },
+                        valueRange = 0.8f..1.1f,
+                        showKeyPoints = true,
+                        keyPoints = listOf(0.8f, 0.9f, 1.0f, 1.1f),
+                        magnetThreshold = 0.05f
+                    )
+                }
+            )
+
+            // Theme (Miuix style, matches upstream APatch settings UI)
+            val colorValues = listOf(
+                0,
+                Color(0xFFEA4335).toArgb(),  // red
+                Color(0xFF34A853).toArgb(),  // green
+                Color(0xFF1A73E8).toArgb(),  // blue
+                Color(0xFF9333EA).toArgb(),  // purple
+                Color(0xFFFB8C00).toArgb(),  // orange
+                Color(0xFF009688).toArgb(),  // teal
+                Color(0xFFE91E63).toArgb(),  // pink
+                Color(0xFF795548).toArgb(),  // brown
+            )
+            var themeMode by rememberSaveable {
+                mutableStateOf(prefs.getInt("color_mode", 0))
             }
-
-            // Custom Night Theme Switch
-            if (!nightFollowSystem) {
-                var nightThemeEnabled by rememberSaveable {
-                    mutableStateOf(
-                        prefs.getBoolean("night_mode_enabled", false)
-                    )
-                }
-                SwitchItem(
-                    icon = Icons.Filled.DarkMode,
-                    title = stringResource(id = R.string.settings_night_theme_enabled),
-                    summary = "",
-                    checked = nightThemeEnabled
-                ) {
-                    prefs.edit { putBoolean("night_mode_enabled", it) }
-                    nightThemeEnabled = it
-                    refreshTheme.value = true
-                }
+            var keyColor by rememberSaveable {
+                mutableStateOf(prefs.getInt("key_color", 0))
             }
+            val keyColorIndex = colorValues.indexOf(keyColor).coerceAtLeast(0)
 
-            // System dynamic color theme
-            val isDynamicColorSupport = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-            if (isDynamicColorSupport) {
-                var useSystemDynamicColor by rememberSaveable {
-                    mutableStateOf(
-                        prefs.getBoolean("use_system_color_theme", true)
-                    )
+            DropdownItem(
+                title = stringResource(R.string.settings_theme),
+                summary = stringResource(R.string.settings_theme_summary),
+                items = listOf(
+                    stringResource(R.string.settings_theme_mode_system),
+                    stringResource(R.string.settings_theme_mode_light),
+                    stringResource(R.string.settings_theme_mode_dark),
+                    stringResource(R.string.settings_theme_mode_monet_system),
+                    stringResource(R.string.settings_theme_mode_monet_light),
+                    stringResource(R.string.settings_theme_mode_monet_dark),
+                ),
+                selectedIndex = themeMode,
+                icon = Icons.Filled.Palette,
+                onSelectedIndexChange = { index ->
+                    themeMode = index
+                    prefs.edit { putInt("color_mode", index) }
                 }
-                SwitchItem(
-                    icon = Icons.Filled.ColorLens,
-                    title = stringResource(id = R.string.settings_use_system_color_theme),
-                    summary = stringResource(id = R.string.settings_use_system_color_theme_summary),
-                    checked = useSystemDynamicColor
-                ) {
-                    prefs.edit { putBoolean("use_system_color_theme", it) }
-                    useSystemDynamicColor = it
-                    refreshTheme.value = true
-                }
+            )
 
-                if (!useSystemDynamicColor) {
-                    val colorMode = prefs.getString("custom_color", "blue")
-                    ArrowItem(
-                        title = stringResource(id = R.string.settings_custom_color_theme),
-                        summary = stringResource(colorNameToString(colorMode.toString())),
-                        icon = Icons.Filled.FormatColorFill,
-                        onClick = { showThemeChooseDialog.value = true }
-                    )
-                }
-            } else {
-                val colorMode = prefs.getString("custom_color", "blue")
-                ArrowItem(
-                    title = stringResource(id = R.string.settings_custom_color_theme),
-                    summary = stringResource(colorNameToString(colorMode.toString())),
+            // Key color (only used by Monet modes)
+            AnimatedVisibility(visible = themeMode in 3..5) {
+                DropdownItem(
+                    title = stringResource(R.string.settings_key_color),
+                    summary = stringResource(R.string.settings_key_color_summary),
+                    items = listOf(
+                        stringResource(R.string.settings_key_color_default),
+                        stringResource(R.string.color_red),
+                        stringResource(R.string.color_green),
+                        stringResource(R.string.color_blue),
+                        stringResource(R.string.color_purple),
+                        stringResource(R.string.color_orange),
+                        stringResource(R.string.color_teal),
+                        stringResource(R.string.color_pink),
+                        stringResource(R.string.color_brown),
+                    ),
+                    selectedIndex = keyColorIndex,
                     icon = Icons.Filled.FormatColorFill,
-                    onClick = { showThemeChooseDialog.value = true }
+                    onSelectedIndexChange = { index ->
+                        keyColor = colorValues[index]
+                        prefs.edit { putInt("key_color", keyColor) }
+                    }
                 )
             }
 
@@ -463,22 +519,33 @@ fun SettingScreen() {
             }
 
             // language
-            val currentLanguage = AppCompatDelegate.getApplicationLocales()[0]?.displayLanguage?.replaceFirstChar {
-                if (it.isLowerCase()) it.titlecase(
-                    Locale.getDefault()
-                ) else it.toString()
-            } ?: stringResource(id = R.string.system_default)
-            ArrowItem(
-                title = stringResource(id = R.string.settings_app_language),
-                summary = currentLanguage,
+            val languagesValues = stringArrayResource(R.array.languages_values)
+            val currentTag = AppCompatDelegate.getApplicationLocales()[0]?.toLanguageTag()
+            val currentLanguageIndex = remember(currentTag) {
+                languagesValues.indexOf(currentTag).coerceAtLeast(0)
+            }
+            DropdownItem(
+                title = stringResource(R.string.settings_app_language),
+                summary = stringResource(R.string.settings_app_language_summary),
+                items = stringArrayResource(R.array.languages).toList(),
+                selectedIndex = currentLanguageIndex,
                 icon = Icons.Filled.Translate,
-                onClick = { showLanguageDialog.value = true }
+                onSelectedIndexChange = { index ->
+                    val tag = if (index == 0) "" else languagesValues[index]
+                    AppCompatDelegate.setApplicationLocales(
+                        if (tag.isEmpty()) {
+                            LocaleListCompat.getEmptyLocaleList()
+                        } else {
+                            LocaleListCompat.forLanguageTags(tag)
+                        }
+                    )
+                }
             )
 
             // log
             ArrowItem(
                 title = stringResource(id = R.string.send_log),
-                summary = "",
+                summary = stringResource(id = R.string.send_log_summary),
                 icon = Icons.Filled.BugReport,
                 onClick = { showLogBottomSheet = true }
             )
@@ -574,69 +641,71 @@ fun SettingScreen() {
                     })
             }
 
+            // clean cache
+            LaunchedEffect(Unit) {
+                cacheSize = withContext(Dispatchers.IO) { calculateCacheSize(context) }
+            }
+            ArrowItem(
+                title = stringResource(id = R.string.settings_clean_cache),
+                summary = formatSize(cacheSize),
+                icon = Icons.Filled.CleaningServices,
+                onClick = {
+                    if (cacheSize > 0L) {
+                        showClearCacheDialog.value = true
+                    } else {
+                        Toast.makeText(context, R.string.no_cache_to_clear, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
 
+            // about
+            ArrowItem(
+                title = stringResource(id = R.string.home_more_menu_about),
+                summary = stringResource(id = R.string.about_summary),
+                icon = Icons.Filled.Info,
+                onClick = { navigator.navigate(AboutScreenDestination) }
+            )
         }
 
     }
 }
+}
 
 @Composable
-fun ThemeChooseDialog(showDialog: MutableState<Boolean>) {
-    val prefs = APApplication.sharedPreferences
+private fun ClearCacheDialog(showDialog: MutableState<Boolean>, cacheSize: Long, onCleared: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val loadingDialog = rememberLoadingDialog()
 
     WindowDialog(
         show = showDialog.value,
-        title = stringResource(id = R.string.settings_custom_color_theme),
+        title = stringResource(id = R.string.clear_cache_title),
+        summary = stringResource(id = R.string.clear_cache_message, formatSize(cacheSize)),
         onDismissRequest = { showDialog.value = false }
     ) {
-        LazyColumn {
-            items(colorsList()) { color ->
-                BasicComponent(
-                    title = stringResource(color.nameId),
-                    modifier = Modifier.fillMaxWidth(),
-                    onClick = {
-                        showDialog.value = false
-                        prefs.edit { putString("custom_color", color.name) }
-                        refreshTheme.value = true
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(
+                text = stringResource(id = android.R.string.cancel),
+                onClick = { showDialog.value = false }
+            )
+            TextButton(
+                text = stringResource(id = android.R.string.ok),
+                colors = ButtonDefaults.textButtonColorsPrimary(),
+                onClick = {
+                    showDialog.value = false
+                    scope.launch {
+                        loadingDialog.withLoading {
+                            clearAppCache(context)
+                        }
+                        onCleared()
                     }
-                )
-            }
+                }
+            )
         }
     }
-
-}
-
-private data class APColor(
-    val name: String, @param:StringRes val nameId: Int
-)
-
-private fun colorsList(): List<APColor> {
-    return listOf(
-        APColor("amber", R.string.amber_theme),
-        APColor("blue_grey", R.string.blue_grey_theme),
-        APColor("blue", R.string.blue_theme),
-        APColor("brown", R.string.brown_theme),
-        APColor("cyan", R.string.cyan_theme),
-        APColor("deep_orange", R.string.deep_orange_theme),
-        APColor("deep_purple", R.string.deep_purple_theme),
-        APColor("green", R.string.green_theme),
-        APColor("indigo", R.string.indigo_theme),
-        APColor("light_blue", R.string.light_blue_theme),
-        APColor("light_green", R.string.light_green_theme),
-        APColor("lime", R.string.lime_theme),
-        APColor("orange", R.string.orange_theme),
-        APColor("pink", R.string.pink_theme),
-        APColor("purple", R.string.purple_theme),
-        APColor("red", R.string.red_theme),
-        APColor("sakura", R.string.sakura_theme),
-        APColor("teal", R.string.teal_theme),
-        APColor("yellow", R.string.yellow_theme),
-    )
-}
-
-@Composable
-private fun colorNameToString(colorName: String): Int {
-    return colorsList().find { it.name == colorName }?.nameId ?: R.string.blue_theme
 }
 
 val suPathChecked: (path: String) -> Boolean = {
@@ -734,44 +803,6 @@ fun SelinuxHideWarningDialog(
                     onConfirm()
                 }
             )
-        }
-    }
-}
-
-@Composable
-fun LanguageDialog(showLanguageDialog: MutableState<Boolean>) {
-
-    val languages = stringArrayResource(id = R.array.languages)
-    val languagesValues = stringArrayResource(id = R.array.languages_values)
-
-    if (showLanguageDialog.value) {
-        WindowDialog(
-            show = showLanguageDialog.value,
-            title = stringResource(id = R.string.settings_app_language),
-            onDismissRequest = { showLanguageDialog.value = false }
-        ) {
-            LazyColumn {
-                itemsIndexed(languages) { index, item ->
-                    BasicComponent(
-                        title = item,
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            showLanguageDialog.value = false
-                            if (index == 0) {
-                                AppCompatDelegate.setApplicationLocales(
-                                    LocaleListCompat.getEmptyLocaleList()
-                                )
-                            } else {
-                                AppCompatDelegate.setApplicationLocales(
-                                    LocaleListCompat.forLanguageTags(
-                                        languagesValues[index]
-                                    )
-                                )
-                            }
-                        }
-                    )
-                }
-            }
         }
     }
 }
