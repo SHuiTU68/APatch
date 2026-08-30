@@ -299,7 +299,6 @@
     <string name="nomount_device_label">Device</string>
     <string name="nomount_model_label">Model</string>
     <string name="nomount_system_label">System</string>
-    <string name="nomount_kernel_label">Kernel</string>
     <string name="nomount_modules_injected_count">%1$d module(s) injected</string>
     <string name="nomount_module_status_active">Active</string>
     <string name="nomount_module_status_loaded">Loaded</string>

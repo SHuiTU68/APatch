@@ -27,7 +27,8 @@ TARGET_PARTITIONS="system system_ext vendor odm product apex oem optics prism
 PROP_FILE="$MODDIR/module.prop"
 BASE_DESC="A built-in metamodule that replaces OverlayFS/MagicMount with VFS path redirection."
 
-command -v "$APD_BIN" >/dev/null 2>&1 || APD_BIN="/data/adb/ap/bin/apd"
+command -v "$APD_BIN" >/dev/null 2>&1 || APD_BIN="/data/adb/apd"
+[ -x "$APD_BIN" ] || APD_BIN="/data/adb/ap/bin/apd"
 
 # Emit the kernel module interface name, e.g. android14-5.15, or empty.
 detect_kmi() {

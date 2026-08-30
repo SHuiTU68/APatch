@@ -155,9 +155,16 @@ pub fn enable() -> Result<()> {
     utils::ensure_file_exists(defs::NOMOUNT_ENABLE_FILE)?;
     // Hot-apply without a reboot: run the mount script right away so a matching
     // LKM is loaded and module files are injected immediately.
+    //
+    // A hot-apply is not a boot, so clear the bootloop semaphore around it.
+    // metamount.sh re-touches .booting during the run; leaving it behind would
+    // make the next real boot think a crash happened, self-disable NoMount and
+    // skip LKM loading (status "未运行" after reboot).
+    let _ = fs::remove_file(defs::NOMOUNT_BOOT_SEMAPHORE);
     if let Err(e) = metamodule::exec_mount_script(defs::NOMOUNT_MODULE_DIR) {
         warn!("nomount: hot mount failed (will retry at next boot): {e:#}");
     }
+    let _ = fs::remove_file(defs::NOMOUNT_BOOT_SEMAPHORE);
     info!("NoMount enabled");
     Ok(())
 }

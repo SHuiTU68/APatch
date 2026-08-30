@@ -29,7 +29,6 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Smartphone
@@ -106,7 +105,6 @@ private const val NM_TARGET_PARTITIONS =
 
 // --- Data models ---
 data class NoMountHomeInfo(
-    val kernelVer: String = "",
     val deviceModel: String = "",
     val androidInfo: String = "",
     val versionFull: String = "",
@@ -442,8 +440,6 @@ private fun HomeTab(info: NoMountHomeInfo, loading: Boolean, onRefresh: () -> Un
                 InfoRow(Icons.Filled.Smartphone, stringResource(R.string.nomount_model_label), info.deviceModel.ifBlank { unknown })
                 HorizontalDivider()
                 InfoRow(Icons.Filled.SystemUpdateAlt, stringResource(R.string.nomount_system_label), info.androidInfo.ifBlank { unknown })
-                HorizontalDivider()
-                InfoRow(Icons.Filled.Memory, stringResource(R.string.nomount_kernel_label), info.kernelVer.ifBlank { unknown })
             }
         }
     }
@@ -961,7 +957,6 @@ object NoMountApi {
 
     fun loadHomeInfo(): NoMountHomeInfo {
         val script = """
-            uname -r; echo "|||"
             getprop ro.product.vendor.model; [ -z "${'$'}(getprop ro.product.vendor.model)" ] && getprop ro.product.model; echo "|||"
             getprop ro.build.version.release; echo "|||"
             getprop ro.build.version.sdk; echo "|||"
@@ -973,16 +968,15 @@ object NoMountApi {
 
         val raw = partsOf(fastCmd(script))
         val unknown = ""
-        val kVer = raw.getOrElse(0) { "" }.ifBlank { unknown }
-        val model = raw.getOrElse(1) { "" }.ifBlank { unknown }
-        val aRel = raw.getOrElse(2) { "" }.ifBlank { unknown }
-        val aSdk = raw.getOrElse(3) { "" }.ifBlank { unknown }
-        val mVer = raw.getOrElse(4) { "" }.ifBlank { unknown }
-        val dVer = raw.getOrElse(5) { "" }.ifBlank { unknown }
-        val nmMode = raw.getOrElse(7) { "" }.lowercase()
+        val model = raw.getOrElse(0) { "" }.ifBlank { unknown }
+        val aRel = raw.getOrElse(1) { "" }.ifBlank { unknown }
+        val aSdk = raw.getOrElse(2) { "" }.ifBlank { unknown }
+        val mVer = raw.getOrElse(3) { "" }.ifBlank { unknown }
+        val dVer = raw.getOrElse(4) { "" }.ifBlank { unknown }
+        val nmMode = raw.getOrElse(6) { "" }.lowercase()
 
         var injectedModules = 0
-        val rulesJson = raw.getOrElse(6) { "[]" }
+        val rulesJson = raw.getOrElse(5) { "[]" }
         runCatching {
             val rules = JSONArray(rulesJson)
             val modCounts = HashSet<String>()
@@ -998,7 +992,6 @@ object NoMountApi {
         }
 
         return NoMountHomeInfo(
-            kernelVer = kVer,
             deviceModel = model,
             androidInfo = if (aRel.isNotEmpty()) "Android $aRel (API $aSdk)" else unknown,
             versionFull = if (mVer.isNotEmpty()) "$mVer ($dVer)" else unknown,

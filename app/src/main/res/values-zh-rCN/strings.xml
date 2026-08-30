@@ -263,7 +263,6 @@
     <string name="nomount_device_label">设备</string>
     <string name="nomount_model_label">型号</string>
     <string name="nomount_system_label">系统</string>
-    <string name="nomount_kernel_label">内核</string>
     <string name="nomount_modules_injected_count">已注入 %1$d 个模块</string>
     <string name="nomount_module_status_active">生效中</string>
     <string name="nomount_module_status_loaded">已加载</string>
