@@ -32,8 +32,41 @@ pub fn is_provisioned() -> bool {
     Path::new(defs::NOMOUNT_MODULE_DIR).join("module.prop").exists()
 }
 
+/// One-time migration from the legacy `/data/adb/nomount` working dir to
+/// `/data/adb/ap/nomount`. Preserves user data (exclusion list, log) and then
+/// removes the legacy directory (which also contained every bundled KMI LKM).
+fn migrate_legacy_data_dir() -> Result<()> {
+    const LEGACY_DATA_DIR: &str = "/data/adb/nomount";
+
+    let new_dir = Path::new(defs::NOMOUNT_DATA_DIR);
+    if new_dir.exists() || !Path::new(LEGACY_DATA_DIR).exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(new_dir)?;
+    for name in [".exclusion_list.json", "nomount.log"] {
+        let from = Path::new(LEGACY_DATA_DIR).join(name);
+        let to = new_dir.join(name);
+        if from.is_file() && !to.exists() {
+            fs::copy(&from, &to)
+                .with_context(|| format!("Failed to migrate NoMount data file {name}"))?;
+        }
+    }
+    let _ = fs::remove_dir_all(LEGACY_DATA_DIR);
+    info!(
+        "NoMount working dir migrated from {LEGACY_DATA_DIR} to {}",
+        new_dir.display()
+    );
+    Ok(())
+}
+
 /// Copy the embedded NoMount assets into the module directory.
 fn provision() -> Result<()> {
+    // One-time migration: the working dir moved from /data/adb/nomount to
+    // /data/adb/ap/nomount. Run it first so user data (exclusion list, log)
+    // survives and the legacy dir (with all KMI LKMs) is cleaned up.
+    migrate_legacy_data_dir()?;
+
     let module_dir = Path::new(defs::NOMOUNT_MODULE_DIR);
     if !module_dir.exists() {
         fs::create_dir_all(module_dir)
@@ -101,12 +134,12 @@ fn provision() -> Result<()> {
 
     // LKM support: kernels without CONFIG_NOMOUNT=y can still use NoMount by
     // loading a matching nomount-<androidX-Y.Z>.ko. We bundle the official
-    // NoMount GKI prebuilt LKMs (GPL-3.0, github.com/maxsteeel/nomount) and
-    // deploy them to the persistent data dir, so GKI devices work out of the
-    // box without the user fetching anything: metamount.sh loads the best match
-    // via `apd insmod` at boot. Non-GKI users can still drop a custom
-    // nomount-<androidX-Y.Z>.ko in the same dir and it takes precedence.
-    fs::create_dir_all(module_dir.join("lkm"))?;
+    // NoMount GKI prebuilt LKMs (GPL-3.0, github.com/maxsteeel/nomount) but
+    // deploy only the one matching this device's KMI into the persistent data
+    // dir, so GKI devices work out of the box without every prebuilt showing
+    // up: metamount.sh loads it via `apd insmod` at boot. Non-GKI users can
+    // still drop a custom nomount-<androidX-Y.Z>.ko in the same dir and it
+    // takes precedence.
     let data_lkm = Path::new(defs::NOMOUNT_DATA_DIR).join("lkm");
     fs::create_dir_all(&data_lkm)?;
     let bundled_lkms: &[(&str, &[u8])] = &[
@@ -139,16 +172,31 @@ fn provision() -> Result<()> {
             include_bytes!("../assets/nomount/lkm/nomount-android16-6.12.ko"),
         ),
     ];
-    for (name, data) in bundled_lkms {
-        fs::write(data_lkm.join(name), data)
-            .with_context(|| format!("Failed to write LKM {name}"))?;
+
+    // Deploy only the ko matching this device's KMI (e.g. nomount-android14-5.15.ko),
+    // and drop stale bundled prebuilts left over from earlier builds so the data
+    // dir stays slim. Custom ko files dropped by the user are never touched.
+    let matched = late_load::detect_kmi()
+        .map(|kmi| format!("nomount-{kmi}.ko"))
+        .filter(|name| bundled_lkms.iter().any(|(n, _)| n == name));
+    if let Some(name) = matched.as_deref() {
+        if let Some((_, data)) = bundled_lkms.iter().find(|(n, _)| *n == name) {
+            fs::write(data_lkm.join(name), data)
+                .with_context(|| format!("Failed to write LKM {name}"))?;
+        }
+    }
+    for (name, _) in bundled_lkms {
+        if data_lkm.join(name).is_file() && Some(*name) != matched.as_deref() {
+            let _ = fs::remove_file(data_lkm.join(name));
+        }
     }
     fs::write(
         data_lkm.join("README.txt"),
-        "Built-in GKI prebuilt LKMs are provisioned automatically. For non-GKI\n\
-         kernels, drop a matching nomount-<androidX-Y.Z>.ko here (e.g.\n\
+        "The built-in LKM matching this device's KMI (detected automatically) is\n\
+         provisioned here and loaded at boot via `apd insmod`. For non-GKI or\n\
+         custom kernels, drop a matching nomount-<androidX-Y.Z>.ko here (e.g.\n\
          nomount-android14-6.1.ko) from the NoMount release\n\
-         (github.com/maxsteeel/nomount); it is loaded at boot via `apd insmod`.\n",
+         (github.com/maxsteeel/nomount); it takes precedence over the bundled one.\n",
     )?;
 
     if !Path::new(defs::NOMOUNT_DATA_DIR).exists() {

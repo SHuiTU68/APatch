@@ -1,7 +1,7 @@
 #!/system/bin/sh
 
 # Remove old log / exclusion_list
-rm -rf /data/adb/nomount/ || true
+rm -rf /data/adb/ap/nomount/ || true
 
 # Remove symlink
 rm -f /data/adb/ksu/bin/nm || true

@@ -2,7 +2,7 @@
 
 MODDIR=${0%/*}
 NM_BIN="$MODDIR/bin/nm"
-EXCLUSION_JSON="/data/adb/nomount/.exclusion_list.json"
+EXCLUSION_JSON="/data/adb/ap/nomount/.exclusion_list.json"
 
 [ -x "$NM_BIN" ] || exit 0
 [ -f "$EXCLUSION_JSON" ] || exit 0

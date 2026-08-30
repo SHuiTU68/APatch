@@ -96,7 +96,7 @@ private const val TAG = "NoMountControl"
 
 // --- Paths (mirror /apd/assets/nomount/webroot/index.js) ---
 private const val NM_MOD_DIR = "/data/adb/modules"
-private const val NM_DATA = "/data/adb/nomount"
+private const val NM_DATA = "/data/adb/ap/nomount"
 private const val NM_BIN = "$NM_MOD_DIR/nomount/bin/nm"
 private const val NM_EXCLUSIONS = "$NM_DATA/.exclusion_list.json"
 private const val NM_DISABLE = "$NM_DATA/disable"

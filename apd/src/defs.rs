@@ -35,7 +35,7 @@ pub const METAMODULE_DIR: &str = concatcp!(ADB_DIR, "metamodule/");
 pub const NOMOUNT_ENABLE_FILE: &str = concatcp!(WORKING_DIR, "nomount_enable");
 pub const NOMOUNT_MODULE_ID: &str = "nomount";
 pub const NOMOUNT_MODULE_DIR: &str = concatcp!(MODULE_DIR, NOMOUNT_MODULE_ID);
-pub const NOMOUNT_DATA_DIR: &str = concatcp!(ADB_DIR, "nomount/");
+pub const NOMOUNT_DATA_DIR: &str = concatcp!(WORKING_DIR, "nomount/");
 pub const NOMOUNT_LOG_FILE: &str = concatcp!(NOMOUNT_DATA_DIR, "nomount.log");
 pub const NOMOUNT_BOOT_SEMAPHORE: &str = concatcp!(NOMOUNT_DATA_DIR, ".booting");
 

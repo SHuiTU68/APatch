@@ -10,13 +10,13 @@
 #   2. A matching nomount LKM (nomount-<androidX-Y.Z>.ko or nomount.ko) loaded
 #      through APatch's own `apd insmod` (or a bundled ko-loader at
 #      $MODDIR/loader as fallback). LKMs are looked up in $MODDIR/lkm and
-#      /data/adb/nomount/lkm.
+#      /data/adb/ap/nomount/lkm.
 
 MODDIR=${0%/*}
 LOADER="$MODDIR/bin/nm"
 APD_BIN="apd"
 MODULES_DIR="/data/adb/modules"
-NOMOUNT_DATA="/data/adb/nomount"
+NOMOUNT_DATA="/data/adb/ap/nomount"
 LKM_DIR1="$MODDIR/lkm"
 LKM_DIR2="$NOMOUNT_DATA/lkm"
 LOG_FILE="$NOMOUNT_DATA/nomount.log"

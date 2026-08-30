@@ -156,7 +156,7 @@ else
   abort "! Kernel module not detected"
 fi
 
-NOMOUNT_DATA="/data/adb/nomount"
+NOMOUNT_DATA="/data/adb/ap/nomount"
 mkdir -p "$NOMOUNT_DATA"
 rm -f "$NOMOUNT_DATA/.booting"
 

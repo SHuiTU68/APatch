@@ -1,6 +1,6 @@
 #!/system/bin/sh
 
-NOMOUNT_DATA="/data/adb/nomount"
+NOMOUNT_DATA="/data/adb/ap/nomount"
 LOG_FILE="$NOMOUNT_DATA/nomount.log"
 BOOT_SEMAPHORE="$NOMOUNT_DATA/.booting"
 
