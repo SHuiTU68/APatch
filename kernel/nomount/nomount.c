@@ -1000,12 +1000,22 @@ static void nomount_restore_superblocks(void)
  *     child of a hidden mount is reparented to its nearest visible ancestor.
  *   - smaps: dropping only the VMA header leaves the Size:/Rss:/... block
  *     orphaned -> malformed output.  We drop the whole VMA block instead.
- *   - statfs f_type spoofing is best-effort: vfs_statx() reads stx_fstype
- *     straight from sb->s_magic and no VFS ops hook can reach it, so
- *     statx() will always report the real f_type while statfs() reports the
- *     forged one.  This residual inconsistency is inherent to a kprobe-free
- *     build; NM_HIDE_STATFS is therefore only recommended where readers use
- *     statfs/statvfs and never statx.
+ *   - statfs f_type spoofing is complete, not best-effort: STATX_FSTYPE has
+ *     never been merged into mainline (not even in v6.12), so statx() has no
+ *     stx_fstype field and cannot leak the real s_magic.  Every f_type reader
+ *     -- statfs(2), fstatfs(2), statvfs(3) -- funnels through sb->s_op->statfs,
+ *     which we hijack and override; the mountinfo/mounts fstype field is
+ *     covered by the line filters.  No un-hooked read path exposes s_magic.
+ *   - per-pid lazy gap: pid dirs cached before the root hook was installed
+ *     never pass through the root lookup, so on activation we actively walk
+ *     /proc and hijack every already-cached pid dir's i_op
+ *     (nm_hide_hijack_existing_pid_dirs); not-yet-cached dirs stay covered by
+ *     the lazy root lookup hook.
+ *   - non-target uid bypass: read/read_iter/llseek short-circuit to the
+ *     original file_operations for any reader whose uid has no proc-kind rule
+ *     (nm_hide_uid_targeted), so unrelated uids observe zero buffering,
+ *     filtering, and timing difference.  A uid-0 rule targets everyone and
+ *     disables the bypass.
  *
  * NM_HIDE_STATFS rides on the existing superblock hijack (nm_sop) and
  * overrides f_type via nomount_hijacked_statfs().
@@ -1018,6 +1028,15 @@ static LIST_HEAD(nm_hide_fop_list);
 static LIST_HEAD(nm_hide_iop_list);
 static LIST_HEAD(nm_hide_files);
 static DEFINE_SPINLOCK(nm_hide_files_lock);
+
+/* uid -> "has a proc-kind hide rule" fast-path table.  nm_hide_uid_targeted()
+ * gates the read/read_iter/llseek bypass: a reader whose uid has no rule is
+ * served straight from the original file_operations with zero buffering,
+ * filtering, and timing difference.  uid-0 rules match every uid, so any such
+ * rule forces everyone through the filter (nomount_hide_uid_all). */
+static DEFINE_IDR(nomount_hide_uid_idr);
+static DEFINE_STATIC_KEY_FALSE(nomount_hide_uid_all);
+#define NM_HIDE_PROC_KINDS (NM_HIDE_MOUNTINFO | NM_HIDE_MOUNTS | NM_HIDE_MAPS | NM_HIDE_SMAPS)
 
 struct nm_hide_file {
     struct list_head list;
@@ -1102,6 +1121,23 @@ static bool nm_hide_rule_kind_active(u32 kinds)
     }
     rcu_read_unlock();
     return active;
+}
+
+/* O(1) gate used by the read/read_iter/llseek bypass.  A reader whose uid is
+ * not targeted by any proc-kind rule is served straight from the original
+ * file_operations, so non-targeted uids observe zero buffering, filtering, and
+ * timing difference.  uid-0 rules match every uid and force everyone through
+ * the filter. */
+static bool nm_hide_uid_targeted(uid_t uid)
+{
+    bool t;
+
+    if (static_branch_unlikely(&nomount_hide_uid_all)) return true;
+    if (!static_branch_unlikely(&nomount_hide_proc_active)) return false;
+    rcu_read_lock();
+    t = idr_find(&nomount_hide_uid_idr, uid) != NULL;
+    rcu_read_unlock();
+    return t;
 }
 
 static int nm_parse_int(const char *s, size_t len)
@@ -1225,7 +1261,7 @@ static int nm_hide_filter(struct nm_hide_file *hf, const char *src, size_t len)
 
     /* Fast path: no hide rules active (e.g. fop left over after rules were
      * cleared) — return the source verbatim. */
-    if (static_branch_unlikely(!nomount_hide_proc_active)) {
+    if (!static_branch_unlikely(&nomount_hide_proc_active)) {
         out = kmalloc(len + 2, GFP_KERNEL);
         if (!out) { err = -ENOMEM; goto out; }
         memcpy(out, src, len);
@@ -1430,10 +1466,19 @@ static int nm_hide_release(struct inode *inode, struct file *file)
 
 static ssize_t nm_hide_read(struct file *file, char __user *buf, size_t count, loff_t *ppos)
 {
-    struct nm_hide_file *hf = nm_hide_file_get(file);
+    struct nm_hide_fop *fop = __get_nm(file->f_op, struct nm_hide_fop, fake_fop, read, nm_hide_read);
+    struct nm_hide_file *hf;
     size_t avail, n;
     int err;
 
+    if (unlikely(!fop)) return -EINVAL;
+    /* Non-targeted reader: passthrough with zero buffering/filtering/timing. */
+    if (!nm_hide_uid_targeted(current_uid().val)) {
+        if (fop->orig_fop && fop->orig_fop->read)
+            return fop->orig_fop->read(file, buf, count, ppos);
+        return -EINVAL;
+    }
+    hf = nm_hide_file_get(file);
     if (!hf) return -EINVAL;
     err = nm_hide_ensure_loaded(hf);
     if (err) return err;
@@ -1450,10 +1495,19 @@ static ssize_t nm_hide_read(struct file *file, char __user *buf, size_t count, l
 static ssize_t nm_hide_read_iter(struct kiocb *iocb, struct iov_iter *to)
 {
     struct file *file = iocb->ki_filp;
-    struct nm_hide_file *hf = nm_hide_file_get(file);
+    struct nm_hide_fop *fop = __get_nm(file->f_op, struct nm_hide_fop, fake_fop, read_iter, nm_hide_read_iter);
+    struct nm_hide_file *hf;
     size_t avail, n;
     int err;
 
+    if (unlikely(!fop)) return -EINVAL;
+    /* Non-targeted reader: passthrough with zero buffering/filtering/timing. */
+    if (!nm_hide_uid_targeted(current_uid().val)) {
+        if (fop->orig_fop && fop->orig_fop->read_iter)
+            return fop->orig_fop->read_iter(iocb, to);
+        return -EINVAL;
+    }
+    hf = nm_hide_file_get(file);
     if (!hf) return -EINVAL;
     err = nm_hide_ensure_loaded(hf);
     if (err) return err;
@@ -1469,10 +1523,19 @@ static ssize_t nm_hide_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 static loff_t nm_hide_llseek(struct file *file, loff_t offset, int whence)
 {
-    struct nm_hide_file *hf = nm_hide_file_get(file);
+    struct nm_hide_fop *fop = __get_nm(file->f_op, struct nm_hide_fop, fake_fop, llseek, nm_hide_llseek);
+    struct nm_hide_file *hf;
     loff_t base, np;
     int err;
 
+    if (unlikely(!fop)) return -EINVAL;
+    /* Non-targeted reader: passthrough with zero buffering/filtering/timing. */
+    if (!nm_hide_uid_targeted(current_uid().val)) {
+        if (fop->orig_fop && fop->orig_fop->llseek)
+            return fop->orig_fop->llseek(file, offset, whence);
+        return -EINVAL;
+    }
+    hf = nm_hide_file_get(file);
     if (!hf) return -EINVAL;
     err = nm_hide_ensure_loaded(hf);
     if (err) return err;
@@ -1657,6 +1720,76 @@ static struct dentry *nm_hide_proc_root_lookup(struct inode *dir, struct dentry 
     return res;
 }
 
+/*
+ * Active per-pid traversal.  When hide rules activate, pid dirs that were
+ * already cached before the root lookup hook was installed never pass through
+ * nm_hide_proc_root_lookup(), so their inode i_op would never be hijacked and
+ * /proc/<pid>/mounts|maps|... would bypass the filter.  We walk the existing
+ * pid dir dentries and hijack them up front; dirs not yet cached are left to
+ * the lazy root hook.  Two phases because the filldir callback runs under
+ * rcu/i_rwsem (proc_pid_readdir) and must not sleep, while
+ * nm_hide_hijack_pid_dir() takes a GFP_KERNEL allocation: phase 1 only takes
+ * inode references, phase 2 (normal context) does the hijack.
+ */
+#define NM_HIDE_MAX_PID_SCAN 2048
+
+struct nm_hide_pid_scan {
+    struct dir_context ctx;
+    struct dentry *root;
+    struct inode **inos; /* heap-allocated: 2048 * 8B would blow the 8KB stack */
+    int cap;
+    int cnt;
+};
+
+static bool nm_hide_pid_scan_actor(struct dir_context *ctx, const char *name, int namlen,
+                                   loff_t off, u64 ino, unsigned int d_type)
+{
+    struct nm_hide_pid_scan *s = container_of(ctx, struct nm_hide_pid_scan, ctx);
+    struct qstr qname;
+    struct dentry *pd;
+    int i;
+
+    if (namlen <= 0 || namlen > 10 || s->cnt >= s->cap) return true;
+    for (i = 0; i < namlen; i++)
+        if (name[i] < '0' || name[i] > '9') return true;
+
+    qname.name = name;
+    qname.len = namlen;
+    qname.hash = full_name_hash(s->root, name, namlen);
+    pd = d_lookup(s->root, &qname);
+    if (pd) {
+        struct inode *inode = d_inode(pd);
+        if (inode && S_ISDIR(inode->i_mode)) {
+            ihold(inode);
+            s->inos[s->cnt++] = inode;
+        }
+        dput(pd);
+    }
+    return true;
+}
+
+static void nm_hide_hijack_existing_pid_dirs(void)
+{
+    struct nm_hide_pid_scan s = { .ctx = { .actor = nm_hide_pid_scan_actor } };
+    struct file *dir;
+    int i;
+
+    s.cap = NM_HIDE_MAX_PID_SCAN;
+    s.inos = kmalloc_array(s.cap, sizeof(*s.inos), GFP_KERNEL);
+    if (!s.inos) return;
+    dir = filp_open("/proc", O_RDONLY | O_DIRECTORY, 0);
+    if (IS_ERR(dir)) { kfree(s.inos); return; }
+    s.root = dir->f_path.dentry;
+    iterate_dir(dir, &s.ctx);
+    fput(dir);
+
+    for (i = 0; i < s.cnt; i++) {
+        nm_hide_hijack_pid_dir(s.inos[i]);
+        iput(s.inos[i]);
+    }
+    kfree(s.inos);
+}
+
 static int nm_hide_setup_proc_hooks(void)
 {
     struct path p;
@@ -1686,6 +1819,10 @@ static int nm_hide_setup_proc_hooks(void)
      * pid dir via get_link and would otherwise bypass the root hook. */
     nm_hide_hijack_self_link("/proc/self");
     nm_hide_hijack_self_link("/proc/thread-self");
+
+    /* Close the per-pid lazy gap: pid dirs cached before this hook existed
+     * would never pass through the root lookup, so hijack them up front. */
+    nm_hide_hijack_existing_pid_dirs();
     return 0;
 }
 
@@ -1735,16 +1872,21 @@ static int nm_hide_apply_rule(struct nomount_hide_rule *rule)
 static void nm_hide_recalc_branches(void)
 {
     const struct nomount_hide_rule *r;
-    bool proc = false, statfs = false;
+    bool proc = false, statfs = false, uid_all = false;
 
     list_for_each_entry(r, &nomount_hide_list, list) {
-        if (r->flags & (NM_HIDE_MOUNTINFO | NM_HIDE_MOUNTS | NM_HIDE_MAPS | NM_HIDE_SMAPS)) proc = true;
+        if (r->flags & NM_HIDE_PROC_KINDS) {
+            proc = true;
+            if (r->target_uid == 0) uid_all = true; /* uid-0 rule matches every uid */
+        }
         if (r->flags & NM_HIDE_STATFS) statfs = true;
     }
     if (proc) static_branch_enable(&nomount_hide_proc_active);
     else static_branch_disable(&nomount_hide_proc_active);
     if (statfs) static_branch_enable(&nomount_hide_statfs_active);
     else static_branch_disable(&nomount_hide_statfs_active);
+    if (uid_all) static_branch_enable(&nomount_hide_uid_all);
+    else static_branch_disable(&nomount_hide_uid_all);
 }
 
 static void nm_hide_restore_all(void)
@@ -1792,6 +1934,19 @@ static int __nomount_add_hide_rule(u32 flags, unsigned int uid, u32 arg, const c
     list_add_tail_rcu(&rule->list, &nomount_hide_list);
     nm_hide_recalc_branches();
 
+    /* Track the target uid for the fast-path read bypass.  Only proc-kind
+     * rules matter (statfs readers never go through the proc fop). */
+    if ((rule->flags & NM_HIDE_PROC_KINDS) &&
+        !idr_find(&nomount_hide_uid_idr, uid)) {
+        if (idr_alloc(&nomount_hide_uid_idr, (void *)1, uid, uid + 1,
+                      GFP_KERNEL) < 0) {
+            list_del_rcu(&rule->list);
+            kfree_rcu(rule, rcu);
+            nm_hide_recalc_branches();
+            return -ENOMEM;
+        }
+    }
+
     err = nm_hide_apply_rule(rule);
     if (err) {
         list_del_rcu(&rule->list);
@@ -1812,6 +1967,18 @@ static void __nomount_del_hide_rule(unsigned int uid, const char *path, u16 len)
             kfree_rcu(r, rcu);
         }
     }
+    /* Drop the uid from the fast-path table once no proc-kind rule targets it. */
+    {
+        struct nomount_hide_rule *r2;
+        bool still = false;
+        list_for_each_entry(r2, &nomount_hide_list, list) {
+            if (r2->target_uid == uid && (r2->flags & NM_HIDE_PROC_KINDS)) {
+                still = true;
+                break;
+            }
+        }
+        if (!still) idr_remove(&nomount_hide_uid_idr, uid);
+    }
     nm_hide_recalc_branches();
 }
 
@@ -1825,6 +1992,12 @@ static void __nomount_clear_hide_rules(bool exit)
         kfree_rcu(r, rcu);
     }
     nm_hide_recalc_branches();
+    /* recalc_branches() disabled nomount_hide_proc_active / uid_all, so new
+     * readers skip idr_find(); wait for any in-flight rcu reader before
+     * tearing down the tree (mirrors the nomount_uid_idr handling). */
+    synchronize_rcu();
+    idr_destroy(&nomount_hide_uid_idr);
+    if (!exit) idr_init(&nomount_hide_uid_idr);
     if (exit) nm_hide_restore_all();
 }
 
