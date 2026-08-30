@@ -67,7 +67,8 @@ import me.bmax.apatch.R
 import me.bmax.apatch.APApplication
 import me.bmax.apatch.apApp
 import me.bmax.apatch.ui.component.SwitchItem
-import me.bmax.apatch.util.APatchCli
+import me.bmax.apatch.util.isNoMountEnabled
+import me.bmax.apatch.util.setNoMountEnabled
 import me.bmax.apatch.util.rootShellForResult
 import me.bmax.apatch.util.ui.LocalSnackbarHost
 import org.json.JSONArray
@@ -1145,9 +1146,9 @@ object NoMountApi {
     // Deep APatch integration: NoMount is fully built in, so "safe mode"
     // collapses into the daemon's enable marker (apd nomount enable/disable).
     // There is no separate /data/adb/ap/nomount/disable file anymore.
-    fun isSafeMode(): Boolean = !APatchCli.isNoMountEnabled()
+    fun isSafeMode(): Boolean = !isNoMountEnabled()
 
-    fun setSafeMode(enabled: Boolean): Boolean = APatchCli.setNoMountEnabled(!enabled)
+    fun setSafeMode(enabled: Boolean): Boolean = setNoMountEnabled(!enabled)
 
     fun clearRules(): Boolean {
         val okJson = writeExclusionsJson(emptyList())
