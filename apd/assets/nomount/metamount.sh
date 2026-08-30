@@ -113,7 +113,8 @@ else
     if ! try_load_lkm; then
         echo "[FATAL] NoMount Internal API is missing/unresponsive." >> "$LOG_FILE"
         echo "[INFO] Kernel must have CONFIG_NOMOUNT=y (or a nomount LKM loaded)." >> "$LOG_FILE"
-        echo "[INFO] Place nomount-<androidX-Y.Z>.ko in $LKM_DIR2 to enable LKM support." >> "$LOG_FILE"
+        echo "[INFO] Built-in GKI LKMs should be in $LKM_DIR2 (provisioned automatically)." >> "$LOG_FILE"
+        echo "[INFO] For custom kernels, drop nomount-<androidX-Y.Z>.ko in $LKM_DIR2." >> "$LOG_FILE"
         echo "[INFO] Skipping injection this boot; re-run 'apd nomount enable' after fixing." >> "$LOG_FILE"
         rm -f "$BOOT_SEMAPHORE"
         exit 0

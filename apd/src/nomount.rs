@@ -100,18 +100,55 @@ fn provision() -> Result<()> {
     utils::ensure_binary(bin_dir.join("nm"))?;
 
     // LKM support: kernels without CONFIG_NOMOUNT=y can still use NoMount by
-    // loading a matching nomount-<androidX-Y.Z>.ko. Prebuilt LKMs come from the
-    // NoMount release; users drop them into the persistent data dir (or the
-    // module dir) and metamount.sh loads the best match via `apd insmod`.
+    // loading a matching nomount-<androidX-Y.Z>.ko. We bundle the official
+    // NoMount GKI prebuilt LKMs (GPL-3.0, github.com/maxsteeel/nomount) and
+    // deploy them to the persistent data dir, so GKI devices work out of the
+    // box without the user fetching anything: metamount.sh loads the best match
+    // via `apd insmod` at boot. Non-GKI users can still drop a custom
+    // nomount-<androidX-Y.Z>.ko in the same dir and it takes precedence.
     fs::create_dir_all(module_dir.join("lkm"))?;
     let data_lkm = Path::new(defs::NOMOUNT_DATA_DIR).join("lkm");
     fs::create_dir_all(&data_lkm)?;
+    let bundled_lkms: &[(&str, &[u8])] = &[
+        (
+            "nomount-android12-5.10.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android12-5.10.ko"),
+        ),
+        (
+            "nomount-android13-5.10.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android13-5.10.ko"),
+        ),
+        (
+            "nomount-android13-5.15.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android13-5.15.ko"),
+        ),
+        (
+            "nomount-android14-5.15.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android14-5.15.ko"),
+        ),
+        (
+            "nomount-android14-6.1.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android14-6.1.ko"),
+        ),
+        (
+            "nomount-android15-6.6.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android15-6.6.ko"),
+        ),
+        (
+            "nomount-android16-6.12.ko",
+            include_bytes!("../assets/nomount/lkm/nomount-android16-6.12.ko"),
+        ),
+    ];
+    for (name, data) in bundled_lkms {
+        fs::write(data_lkm.join(name), data)
+            .with_context(|| format!("Failed to write LKM {name}"))?;
+    }
     fs::write(
         data_lkm.join("README.txt"),
-        "Drop a prebuilt NoMount LKM here, named nomount-<androidX-Y.Z>.ko\n\
-         (e.g. nomount-android14-6.1.ko). It is loaded automatically at boot on\n\
-         kernels that lack built-in CONFIG_NOMOUNT support. Get the .ko files from\n\
-         the NoMount release (github.com/maxsteeel/nomount).\n",
+        "Built-in GKI prebuilt LKMs are provisioned automatically. For non-GKI\n\
+         kernels, drop a matching nomount-<androidX-Y.Z>.ko here (e.g.\n\
+         nomount-android14-6.1.ko) from the NoMount release\n\
+         (github.com/maxsteeel/nomount); it is loaded at boot via `apd insmod`.\n",
     )?;
 
     if !Path::new(defs::NOMOUNT_DATA_DIR).exists() {
