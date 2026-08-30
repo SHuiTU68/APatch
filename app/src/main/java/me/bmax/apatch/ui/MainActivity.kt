@@ -1,7 +1,6 @@
 package me.bmax.apatch.ui
 
 import android.annotation.SuppressLint
-import android.content.SharedPreferences
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
@@ -35,20 +34,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.navigation.NavBackStackEntry
@@ -65,12 +58,8 @@ import com.ramcosta.composedestinations.utils.rememberDestinationsNavigator
 import me.bmax.apatch.APApplication
 import me.bmax.apatch.ui.screen.BottomBarDestination
 import me.bmax.apatch.ui.theme.APatchTheme
-import me.bmax.apatch.ui.theme.LocalEnableBlur
-import me.bmax.apatch.ui.theme.LocalPageScale
-import me.bmax.apatch.ui.theme.blurEnabled
 import me.bmax.apatch.ui.theme.blurEffect
 import me.bmax.apatch.ui.theme.getAppBarColor
-import me.bmax.apatch.ui.theme.pageScale
 import me.bmax.apatch.ui.theme.rememberBlurBackdrop
 import me.bmax.apatch.ui.theme.withBackdrop
 import me.bmax.apatch.ui.viewmodel.SuperUserViewModel
@@ -101,34 +90,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            val prefs = APApplication.sharedPreferences
-            var colorMode by remember { mutableIntStateOf(prefs.getInt("color_mode", 0)) }
-            var keyColorInt by remember { mutableIntStateOf(prefs.getInt("key_color", 0)) }
-            val keyColor = remember(keyColorInt) {
-                if (keyColorInt == 0) null else Color(keyColorInt)
-            }
-
-            // Initialize global UI settings that MainActivity consumes.
-            remember {
-                pageScale = prefs.getFloat("page_scale", 1.0f)
-                blurEnabled = prefs.getBoolean("blur_enabled", true)
-            }
-
-            // Live-update the theme when the Settings page writes these prefs.
-            DisposableEffect(prefs) {
-                val listener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                    when (key) {
-                        "color_mode" -> colorMode = prefs.getInt("color_mode", 0)
-                        "key_color" -> keyColorInt = prefs.getInt("key_color", 0)
-                        "page_scale" -> pageScale = prefs.getFloat("page_scale", 1.0f)
-                        "blur_enabled" -> blurEnabled = prefs.getBoolean("blur_enabled", true)
-                    }
-                }
-                prefs.registerOnSharedPreferenceChangeListener(listener)
-                onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
-            }
-
-            APatchTheme(colorMode = colorMode, keyColor = keyColor) {
+            APatchTheme {
                 val navController = rememberNavController()
                 val snackBarHostState = remember { SnackbarHostState() }
                 val configuration = LocalConfiguration.current
@@ -207,15 +169,7 @@ class MainActivity : AppCompatActivity() {
                     snackbarHost = { SnackbarHost(state = snackBarHostState) },
                     contentWindowInsets = WindowInsets(0, 0, 0, 0)
                 ) { innerPadding ->
-                    val density = LocalDensity.current
-                    val scale = pageScale
-                    val scaledDensity = remember(density, scale) {
-                        Density(density.density * scale, density.fontScale)
-                    }
                     CompositionLocalProvider(
-                        LocalDensity provides scaledDensity,
-                        LocalPageScale provides scale,
-                        LocalEnableBlur provides blurEnabled,
                         LocalSnackbarHost provides snackBarHostState,
                     ) {
                         if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {

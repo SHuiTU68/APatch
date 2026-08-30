@@ -180,8 +180,6 @@
     <string name="settings_selinux_hide_warning_non_gki">非GKI内核风险更大，可能导致无法开机，请确保已备份数据。</string>
     <string name="settings_nomount">内置 NoMount (VFS 挂载)</string>
     <string name="settings_nomount_summary">用内存中的 VFS 路径重定向替代 OverlayFS/MagicMount。支持内置 NoMount 的内核，或通过匹配的 nomount LKM 工作。</string>
-    <string name="settings_nomount_webui">NoMount 控制页</string>
-    <string name="settings_nomount_webui_summary">打开内置 NoMount 模块的 WebUI 控制页。</string>
     <string name="settings_jailbreak_mode">越狱模式</string>
     <string name="settings_jailbreak_mode_summary">在未修补的内核上加载 KernelPatch 模块。该模式下不允许修补。</string>
     <string name="settings_jailbreak_soft_reboot">软重启</string>
@@ -247,41 +245,7 @@
     <string name="kpm_embedded_unload_invalid">嵌入的 KPM 无法卸载；重启后仍会保持生效。</string>
     <string name="kpm_install_toast_succ">安装成功，重启后生效</string>
 
-    <!-- 主题与外观 -->
-    <string name="settings_theme">主题</string>
-    <string name="settings_theme_summary">选择主题模式</string>
-    <string name="settings_theme_mode_system">跟随系统</string>
-    <string name="settings_theme_mode_light">浅色</string>
-    <string name="settings_theme_mode_dark">深色</string>
-    <string name="settings_theme_mode_monet_system">Monet（跟随系统）</string>
-    <string name="settings_theme_mode_monet_light">Monet（浅色）</string>
-    <string name="settings_theme_mode_monet_dark">Monet（深色）</string>
-    <string name="settings_key_color">主题色</string>
-    <string name="settings_key_color_summary">使用 Monet 时自定义强调色</string>
-    <string name="settings_key_color_default">默认</string>
-    <string name="color_red">红色</string>
-    <string name="color_green">绿色</string>
-    <string name="color_blue">蓝色</string>
-    <string name="color_purple">紫色</string>
-    <string name="color_orange">橙色</string>
-    <string name="color_teal">青色</string>
-    <string name="color_pink">粉色</string>
-    <string name="color_brown">棕色</string>
-    <string name="settings_blur_enabled">启用毛玻璃效果</string>
-    <string name="settings_blur_enabled_summary">为界面应用背景模糊</string>
-    <string name="settings_page_scale">页面缩放</string>
-    <string name="settings_page_scale_summary">调整界面的显示大小</string>
-    <string name="settings_clean_cache">清除缓存</string>
-    <string name="settings_clean_cache_summary">删除缓存文件以释放存储空间</string>
-    <string name="no_cache_to_clear">没有可清理的缓存</string>
-    <string name="clear_cache_title">清除缓存</string>
-    <string name="clear_cache_message">将删除 %1$s 的缓存文件，是否继续？</string>
-    <string name="about_summary">版本与支持</string>
-    <string name="send_log_summary">保存日志或分享给开发者</string>
-    <string name="settings_app_language_summary">配置显示语言</string>
-    <string name="setting_reset_su_path_summary">自定义超级用户二进制文件的路径</string>
-
-    <!-- NoMount 原生控制页 -->
+    <!-- NoMount 控制面板（原生） -->
     <string name="nomount_control">NoMount</string>
     <string name="nomount_control_entry">NoMount 控制页</string>
     <string name="nomount_control_entry_summary">管理内置 NoMount 模块的模块、排除项与选项。</string>

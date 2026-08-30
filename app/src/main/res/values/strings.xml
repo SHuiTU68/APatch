@@ -41,8 +41,6 @@
     <string name="settings_selinux_hide_warning_non_gki">"Non-GKI kernels carry a higher risk and may cause boot failure. Make sure your data is backed up."</string>
     <string name="settings_nomount">Built-in NoMount (VFS mounting)</string>
     <string name="settings_nomount_summary">"Replace OverlayFS/MagicMount with in-RAM VFS path redirection. Works with a NoMount-enabled kernel or via a matching nomount LKM."</string>
-    <string name="settings_nomount_webui">NoMount control panel</string>
-    <string name="settings_nomount_webui_summary">"Open the WebUI control page of the built-in NoMount module."</string>
     <string name="settings_jailbreak_mode">Jailbreak mode</string>
     <string name="settings_jailbreak_mode_summary">"Load the KernelPatch module on a stock kernel. Patching is not allowed in this mode."</string>
     <string name="settings_jailbreak_soft_reboot">Soft reboot</string>
@@ -282,40 +280,6 @@
     <string name="crash_handle_title">App crashed…</string>
     <string name="crash_handle_copy">Copy crash log</string>
     <string name="crash_handle_copied">Crash log copied to clipboard.</string>
-
-    <!-- Theme & appearance (Miuix style) -->
-    <string name="settings_theme">Theme</string>
-    <string name="settings_theme_summary">Choose theme mode</string>
-    <string name="settings_theme_mode_system">Follow system</string>
-    <string name="settings_theme_mode_light">Light</string>
-    <string name="settings_theme_mode_dark">Dark</string>
-    <string name="settings_theme_mode_monet_system">Monet (Follow system)</string>
-    <string name="settings_theme_mode_monet_light">Monet (Light)</string>
-    <string name="settings_theme_mode_monet_dark">Monet (Dark)</string>
-    <string name="settings_key_color">Key color</string>
-    <string name="settings_key_color_summary">Customize accent when using Monet</string>
-    <string name="settings_key_color_default">Default</string>
-    <string name="color_red">Red</string>
-    <string name="color_green">Green</string>
-    <string name="color_blue">Blue</string>
-    <string name="color_purple">Purple</string>
-    <string name="color_orange">Orange</string>
-    <string name="color_teal">Teal</string>
-    <string name="color_pink">Pink</string>
-    <string name="color_brown">Brown</string>
-    <string name="settings_blur_enabled">Enable blur effects</string>
-    <string name="settings_blur_enabled_summary">Apply background blur for visual style</string>
-    <string name="settings_page_scale">Page scale</string>
-    <string name="settings_page_scale_summary">Adjust the display size of the UI</string>
-    <string name="settings_clean_cache">Clear cache</string>
-    <string name="settings_clean_cache_summary">Delete cached files to free up storage</string>
-    <string name="no_cache_to_clear">No cache to clear</string>
-    <string name="clear_cache_title">Clear cache</string>
-    <string name="clear_cache_message">This will delete %1$s of cached files. Continue?</string>
-    <string name="about_summary">Version and support</string>
-    <string name="send_log_summary">Save logs or share them with developers</string>
-    <string name="settings_app_language_summary">Configure the display language</string>
-    <string name="setting_reset_su_path_summary">Customize the path for the SuperUser binary</string>
 
     <!-- NoMount control panel (native) -->
     <string name="nomount_control">NoMount</string>
