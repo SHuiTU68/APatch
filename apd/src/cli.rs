@@ -210,6 +210,8 @@ enum NoMount {
     Disable,
     /// Show NoMount status
     Status,
+    /// Natively inject all active module files now (no reboot needed)
+    Inject,
 }
 
 pub fn run() -> Result<()> {
@@ -399,6 +401,7 @@ pub fn run() -> Result<()> {
             NoMount::Enable => nomount::enable(),
             NoMount::Disable => nomount::disable(),
             NoMount::Status => nomount::status(),
+            NoMount::Inject => nomount::inject(),
         },
 
         Commands::Sepolicy(sepolicy_args) => crate::sepolicy::execute(&sepolicy_args),

@@ -187,10 +187,18 @@ pub fn on_post_data_fs(superkey: Option<String>) -> Result<()> {
     }
 
     // Re-provision the built-in NoMount metamodule if the toggle is on so the
-    // mount script below can register module files with the kernel.
+    // injection below can register module files with the kernel.
     crate::nomount::provision_if_enabled();
 
-    if let Err(e) = metamodule::exec_mount_script(module_dir) {
+    // Deep APatch integration: when the built-in NoMount is the active
+    // metamodule, inject natively in-process (no metamount.sh / find / xargs /
+    // nm subprocess storm). Otherwise fall back to the generic metamodule
+    // mount script (e.g. a user-installed metamodule ZIP).
+    if crate::nomount::is_enabled() && crate::nomount::is_active_metamodule() {
+        if let Err(e) = crate::nomount::inject_at_boot() {
+            warn!("nomount: native boot injection failed: {e}");
+        }
+    } else if let Err(e) = metamodule::exec_mount_script(module_dir) {
         warn!("execute metamodule mount failed: {e}");
     }
 

@@ -10,6 +10,7 @@ mod magica;
 mod metamodule;
 mod module;
 mod nomount;
+mod nomount_inject;
 mod module_config;
 mod package;
 #[cfg(any(target_os = "linux", target_os = "android"))]

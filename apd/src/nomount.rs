@@ -20,7 +20,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use log::{info, warn};
 
-use crate::{defs, late_load, metamodule, utils};
+use crate::{defs, late_load, metamodule, nomount_inject, utils};
 
 /// Whether the built-in NoMount feature is currently enabled (toggle state).
 pub fn is_enabled() -> bool {
@@ -30,6 +30,13 @@ pub fn is_enabled() -> bool {
 /// Whether the built-in NoMount metamodule is provisioned on disk.
 pub fn is_provisioned() -> bool {
     Path::new(defs::NOMOUNT_MODULE_DIR).join("module.prop").exists()
+}
+
+/// Whether the built-in NoMount module is the *active* metamodule (i.e. the
+/// `/data/adb/metamodule` symlink resolves to it). Used by the boot path to
+/// decide between native injection and the generic metamodule mount script.
+pub fn is_active_metamodule() -> bool {
+    metamodule::get_metamodule_path().as_deref() == Some(Path::new(defs::NOMOUNT_MODULE_DIR))
 }
 
 /// One-time migration from the legacy `/data/adb/nomount` working dir to
@@ -238,19 +245,100 @@ fn ensure_active() -> Result<()> {
 pub fn enable() -> Result<()> {
     ensure_active()?;
     utils::ensure_file_exists(defs::NOMOUNT_ENABLE_FILE)?;
-    // Hot-apply without a reboot: run the mount script right away so a matching
-    // LKM is loaded and module files are injected immediately.
+    // Hot-apply without a reboot: load a matching LKM if needed and inject
+    // module files natively, all in-process (no metamount.sh subprocess storm).
     //
     // A hot-apply is not a boot, so clear the bootloop semaphore around it.
-    // metamount.sh re-touches .booting during the run; leaving it behind would
-    // make the next real boot think a crash happened, self-disable NoMount and
-    // skip LKM loading (status "未运行" after reboot).
+    // The boot path re-touches .booting; leaving it behind would make the next
+    // real boot think a crash happened, self-disable NoMount and skip LKM
+    // loading (status "未运行" after reboot).
     let _ = fs::remove_file(defs::NOMOUNT_BOOT_SEMAPHORE);
-    if let Err(e) = metamodule::exec_mount_script(defs::NOMOUNT_MODULE_DIR) {
-        warn!("nomount: hot mount failed (will retry at next boot): {e:#}");
+    if let Err(e) = inject() {
+        warn!("nomount: hot injection failed (will retry at next boot): {e:#}");
     }
     let _ = fs::remove_file(defs::NOMOUNT_BOOT_SEMAPHORE);
     info!("NoMount enabled");
+    Ok(())
+}
+
+/// Native injection: load the kernel driver if needed, then register every
+/// active module's files (and the exclusion UIDs) with it. Used both for the
+/// hot-apply path and by the `apd nomount inject` command.
+pub fn inject() -> Result<()> {
+    if !nomount_inject::ensure_kernel_support()? {
+        bail!("NoMount Internal API is missing/unresponsive");
+    }
+    let report = nomount_inject::inject_all()?;
+    let uids = nomount_inject::sync_exclusion_uids()?;
+    info!(
+        "NoMount injected {} file(s), {} whiteout(s) from {} module(s), {} uid(s)",
+        report.files, report.whiteouts, report.modules, uids
+    );
+    Ok(())
+}
+
+/// Boot-time injection called from post-fs-data. Replicates metamount.sh's
+/// bootloop guard, kernel-support check and logging, but runs the whole
+/// injection in-process. The `.booting` semaphore is left in place for
+/// boot-completed.sh to clear, exactly like the shell flow.
+pub fn inject_at_boot() -> Result<()> {
+    let data_dir = Path::new(defs::NOMOUNT_DATA_DIR);
+    if !data_dir.exists() {
+        fs::create_dir_all(data_dir)?;
+    }
+    let semaphore = Path::new(defs::NOMOUNT_BOOT_SEMAPHORE);
+
+    if semaphore.exists() {
+        nomount_inject::log_append("[FATAL] Bootloop detected! NoMount caused a crash on the last boot.");
+        nomount_inject::log_append("[INFO] Disabling NoMount for safety...");
+        let _ = fs::write(
+            Path::new(defs::NOMOUNT_MODULE_DIR).join(defs::DISABLE_FILE_NAME),
+            "",
+        );
+        let _ = fs::remove_file(defs::NOMOUNT_ENABLE_FILE);
+        let _ = fs::remove_file(semaphore);
+        return Ok(());
+    }
+    let _ = fs::write(semaphore, "");
+
+    nomount_inject::log_append(&format!(
+        "=== NoMount Injection | Started: {} ===",
+        nomount_inject::now_str()
+    ));
+    nomount_inject::log_append(&format!(
+        "Kernel Version: {}",
+        nomount_inject::kernel_release_str()
+    ));
+
+    if !nomount_inject::ensure_kernel_support()? {
+        nomount_inject::log_append("[FATAL] NoMount Internal API is missing/unresponsive.");
+        nomount_inject::log_append(
+            "[INFO] Kernel must have CONFIG_NOMOUNT=y (or a nomount LKM loaded).",
+        );
+        nomount_inject::log_append(&format!(
+            "[INFO] Place nomount-<androidX-Y.Z>.ko in {}/lkm",
+            defs::NOMOUNT_DATA_DIR
+        ));
+        nomount_inject::log_append(
+            "[INFO] Skipping injection this boot; re-run 'apd nomount enable' after fixing.",
+        );
+        let _ = fs::remove_file(semaphore);
+        return Ok(());
+    }
+
+    match inject() {
+        Ok(()) => {
+            nomount_inject::log_append(&format!(
+                "=== Injection Complete: {} ===",
+                nomount_inject::now_str()
+            ));
+        }
+        Err(e) => {
+            warn!("nomount: boot injection failed: {e:#}");
+            nomount_inject::log_append(&format!("[FATAL] Injection failed: {e:#}"));
+            let _ = fs::remove_file(semaphore);
+        }
+    }
     Ok(())
 }
 
@@ -285,6 +373,14 @@ pub fn status() -> Result<()> {
     println!(
         "kernel-kmi: {}",
         late_load::detect_kmi().unwrap_or_else(|| "<unknown>".to_string())
+    );
+    println!(
+        "kernel-support: {}",
+        if nomount_inject::kernel_version().is_some() {
+            "yes"
+        } else {
+            "no (need CONFIG_NOMOUNT or a matching LKM)"
+        }
     );
     Ok(())
 }
