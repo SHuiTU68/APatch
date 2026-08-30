@@ -186,15 +186,15 @@ pub fn on_post_data_fs(superkey: Option<String>) -> Result<()> {
         warn!("load sepolicy.rule failed");
     }
 
-    // Re-provision the built-in NoMount metamodule if the toggle is on so the
+    // Re-provision the built-in NoMount feature if the toggle is on so the
     // injection below can register module files with the kernel.
     crate::nomount::provision_if_enabled();
 
-    // Deep APatch integration: when the built-in NoMount is the active
-    // metamodule, inject natively in-process (no metamount.sh / find / xargs /
-    // nm subprocess storm). Otherwise fall back to the generic metamodule
-    // mount script (e.g. a user-installed metamodule ZIP).
-    if crate::nomount::is_enabled() && crate::nomount::is_active_metamodule() {
+    // Deep APatch integration: when the built-in NoMount is enabled, inject
+    // natively in-process (no metamount.sh / find / xargs / nm subprocess
+    // storm). Otherwise fall back to the generic metamodule mount script (e.g.
+    // a user-installed metamodule ZIP).
+    if crate::nomount::is_enabled() {
         if let Err(e) = crate::nomount::inject_at_boot() {
             warn!("nomount: native boot injection failed: {e}");
         }
@@ -290,6 +290,10 @@ pub fn on_boot_completed(superkey: Option<String>) -> Result<()> {
     info!("on_boot_completed triggered!");
 
     run_stage("boot-completed", superkey, false);
+
+    // Built-in NoMount: clear the boot semaphore natively (it used to be the
+    // module's boot-completed.sh job).
+    crate::nomount::boot_completed();
 
     run_uid_monitor();
     Ok(())

@@ -1,15 +1,17 @@
-//! Built-in NoMount (VFS path redirection) metamodule
+//! Built-in NoMount (VFS path redirection) feature
 //!
 //! NoMount is bundled inside APatch and replaces the OverlayFS/MagicMount
 //! mount strategy with in-RAM VFS path redirection: instead of modifying the
 //! mount table, module files are registered with the kernel and spliced into
 //! path resolution / directory iteration on the fly.
 //!
-//! It is exposed as a *metamodule* (id = `nomount`). When the manager toggle is
-//! on, `/data/adb/metamodule` points to `/data/adb/modules/nomount` whose
-//! `metamount.sh` registers module files with the kernel. The toggle state is
-//! persisted in the `NOMOUNT_ENABLE_FILE` marker under the working dir, so the
-//! daemon can re-provision the module at boot independently of the module dir.
+//! It is fully built in: there is no module dir under `/data/adb/modules` and
+//! no metamodule symlink — the feature never shows up in the module page.
+//! Everything lives under the working dir (`/data/adb/ap/nomount`): the `nm`
+//! CLI helper (interactive ops from the manager), the matching LKM, the boot
+//! log and the state markers. The toggle state is persisted in the
+//! `NOMOUNT_ENABLE_FILE` marker so the daemon can re-provision and re-inject
+//! at boot independently of any module machinery.
 
 use std::{
     fs,
@@ -27,16 +29,9 @@ pub fn is_enabled() -> bool {
     Path::new(defs::NOMOUNT_ENABLE_FILE).exists()
 }
 
-/// Whether the built-in NoMount metamodule is provisioned on disk.
+/// Whether the built-in NoMount feature is provisioned on disk (data dir).
 pub fn is_provisioned() -> bool {
-    Path::new(defs::NOMOUNT_MODULE_DIR).join("module.prop").exists()
-}
-
-/// Whether the built-in NoMount module is the *active* metamodule (i.e. the
-/// `/data/adb/metamodule` symlink resolves to it). Used by the boot path to
-/// decide between native injection and the generic metamodule mount script.
-pub fn is_active_metamodule() -> bool {
-    metamodule::get_metamodule_path().as_deref() == Some(Path::new(defs::NOMOUNT_MODULE_DIR))
+    Path::new(defs::NOMOUNT_DATA_DIR).join("version").exists()
 }
 
 /// One-time migration from the legacy `/data/adb/nomount` working dir to
@@ -67,87 +62,54 @@ fn migrate_legacy_data_dir() -> Result<()> {
     Ok(())
 }
 
-/// Copy the embedded NoMount assets into the module directory.
+/// Remove leftovers from builds that shipped NoMount as a metamodule
+/// (`/data/adb/modules/nomount` + the `/data/adb/metamodule` symlink), so the
+/// feature is fully built in and never appears in the module page again.
+fn cleanup_legacy_module() {
+    let _ = fs::remove_dir_all(Path::new(defs::NOMOUNT_MODULE_DIR));
+    if let Some(path) = metamodule::get_metamodule_path() {
+        if path == Path::new(defs::NOMOUNT_MODULE_DIR) {
+            let _ = metamodule::remove_symlink();
+        }
+    }
+}
+
+/// Provision the built-in NoMount feature under its data dir.
+///
+/// Writes the `nm` CLI helper (interactive ops from the manager), a version
+/// stamp (what `module.prop` used to carry) and the matching LKM. Also cleans
+/// up the legacy metamodule layout from older builds.
 fn provision() -> Result<()> {
     // One-time migration: the working dir moved from /data/adb/nomount to
     // /data/adb/ap/nomount. Run it first so user data (exclusion list, log)
     // survives and the legacy dir (with all KMI LKMs) is cleaned up.
     migrate_legacy_data_dir()?;
+    cleanup_legacy_module();
 
-    let module_dir = Path::new(defs::NOMOUNT_MODULE_DIR);
-    if !module_dir.exists() {
-        fs::create_dir_all(module_dir)
-            .with_context(|| "Failed to create nomount module dir")?;
-        fs::set_permissions(module_dir, fs::Permissions::from_mode(0o755))?;
-    }
+    let data_dir = Path::new(defs::NOMOUNT_DATA_DIR);
+    fs::create_dir_all(data_dir)?;
 
-    for (name, content) in [
-        ("module.prop", include_str!("../assets/nomount/module.prop")),
-        ("metamount.sh", include_str!("../assets/nomount/metamount.sh")),
-        (
-            "metainstall.sh",
-            include_str!("../assets/nomount/metainstall.sh"),
-        ),
-        ("service.sh", include_str!("../assets/nomount/service.sh")),
-        (
-            "boot-completed.sh",
-            include_str!("../assets/nomount/boot-completed.sh"),
-        ),
-        ("uninstall.sh", include_str!("../assets/nomount/uninstall.sh")),
-        ("customize.sh", include_str!("../assets/nomount/customize.sh")),
-    ] {
-        fs::write(module_dir.join(name), content)
-            .with_context(|| format!("Failed to write {name}"))?;
-    }
-
-    // WebUI + locale assets (dev branch)
-    let webroot_dir = module_dir.join("webroot");
-    fs::create_dir_all(webroot_dir.join("locales"))?;
-    for (name, content) in [
-        (
-            "index.html",
-            include_str!("../assets/nomount/webroot/index.html"),
-        ),
-        ("index.js", include_str!("../assets/nomount/webroot/index.js")),
-        (
-            "styles.css",
-            include_str!("../assets/nomount/webroot/styles.css"),
-        ),
-        ("theme.css", include_str!("../assets/nomount/webroot/theme.css")),
-    ] {
-        fs::write(webroot_dir.join(name), content)
-            .with_context(|| format!("Failed to write webroot/{name}"))?;
-    }
-    for (name, content) in [
-        ("bn.json", include_str!("../assets/nomount/webroot/locales/bn.json")),
-        ("en.json", include_str!("../assets/nomount/webroot/locales/en.json")),
-        ("es.json", include_str!("../assets/nomount/webroot/locales/es.json")),
-        ("id.json", include_str!("../assets/nomount/webroot/locales/id.json")),
-        ("ja.json", include_str!("../assets/nomount/webroot/locales/ja.json")),
-        ("ru.json", include_str!("../assets/nomount/webroot/locales/ru.json")),
-        ("tr.json", include_str!("../assets/nomount/webroot/locales/tr.json")),
-        ("vi.json", include_str!("../assets/nomount/webroot/locales/vi.json")),
-        ("zh.json", include_str!("../assets/nomount/webroot/locales/zh.json")),
-    ] {
-        fs::write(webroot_dir.join("locales").join(name), content)
-            .with_context(|| format!("Failed to write webroot/locales/{name}"))?;
-    }
-
-    let bin_dir = module_dir.join("bin");
+    // nm CLI helper, used by the manager for interactive ops (hot load/unload,
+    // uid management). Boot-time injection is native and never shells out to it.
+    let bin_dir = data_dir.join("bin");
     fs::create_dir_all(&bin_dir)?;
     fs::write(bin_dir.join("nm"), include_bytes!("../assets/nomount/bin/nm"))
         .with_context(|| "Failed to write nm binary")?;
     utils::ensure_binary(bin_dir.join("nm"))?;
+
+    // Version stamp (replaces the old module.prop version= line).
+    fs::write(data_dir.join("version"), "version=v2.0.0\n")
+        .with_context(|| "Failed to write nomount version")?;
 
     // LKM support: kernels without CONFIG_NOMOUNT=y can still use NoMount by
     // loading a matching nomount-<androidX-Y.Z>.ko. We bundle the official
     // NoMount GKI prebuilt LKMs (GPL-3.0, github.com/maxsteeel/nomount) but
     // deploy only the one matching this device's KMI into the persistent data
     // dir, so GKI devices work out of the box without every prebuilt showing
-    // up: metamount.sh loads it via `apd insmod` at boot. Non-GKI users can
-    // still drop a custom nomount-<androidX-Y.Z>.ko in the same dir and it
-    // takes precedence.
-    let data_lkm = Path::new(defs::NOMOUNT_DATA_DIR).join("lkm");
+    // up: the native injection loads it via `apd insmod` at boot. Non-GKI
+    // users can still drop a custom nomount-<androidX-Y.Z>.ko in the same dir
+    // and it takes precedence.
+    let data_lkm = data_dir.join("lkm");
     fs::create_dir_all(&data_lkm)?;
     let bundled_lkms: &[(&str, &[u8])] = &[
         (
@@ -206,38 +168,15 @@ fn provision() -> Result<()> {
          (github.com/maxsteeel/nomount); it takes precedence over the bundled one.\n",
     )?;
 
-    if !Path::new(defs::NOMOUNT_DATA_DIR).exists() {
-        fs::create_dir_all(defs::NOMOUNT_DATA_DIR)?;
-    }
-
-    info!(
-        "NoMount built-in metamodule provisioned at {}",
-        defs::NOMOUNT_MODULE_DIR
-    );
+    info!("NoMount built-in feature provisioned at {}", data_dir.display());
     Ok(())
 }
 
-/// Ensure the built-in NoMount metamodule is provisioned and active.
+/// Ensure the built-in NoMount feature is provisioned.
 ///
-/// Idempotent; safe to call on every boot. Never fights a metamodule that the
-/// user installed as a ZIP: if a different metamodule is active, we bail so the
-/// boot path can log a warning and fall back to the default overlay mounting.
+/// Idempotent; safe to call on every boot.
 fn ensure_active() -> Result<()> {
-    if let Some(path) = metamodule::get_metamodule_path() {
-        if path != Path::new(defs::NOMOUNT_MODULE_DIR) {
-            bail!(
-                "another metamodule is active at {}; disable it before using built-in NoMount",
-                path.display()
-            );
-        }
-    }
-
     provision()?;
-
-    let disable = Path::new(defs::NOMOUNT_MODULE_DIR).join(defs::DISABLE_FILE_NAME);
-    let _ = fs::remove_file(&disable);
-
-    metamodule::ensure_symlink(defs::NOMOUNT_MODULE_DIR)?;
     Ok(())
 }
 
@@ -277,10 +216,10 @@ pub fn inject() -> Result<()> {
     Ok(())
 }
 
-/// Boot-time injection called from post-fs-data. Replicates metamount.sh's
-/// bootloop guard, kernel-support check and logging, but runs the whole
-/// injection in-process. The `.booting` semaphore is left in place for
-/// boot-completed.sh to clear, exactly like the shell flow.
+/// Boot-time injection called from post-fs-data. Runs the whole injection
+/// in-process. The `.booting` semaphore is left in place until boot completes,
+/// when `boot_completed()` clears it natively (it used to be a module's
+/// boot-completed.sh job).
 pub fn inject_at_boot() -> Result<()> {
     let data_dir = Path::new(defs::NOMOUNT_DATA_DIR);
     if !data_dir.exists() {
@@ -291,10 +230,8 @@ pub fn inject_at_boot() -> Result<()> {
     if semaphore.exists() {
         nomount_inject::log_append("[FATAL] Bootloop detected! NoMount caused a crash on the last boot.");
         nomount_inject::log_append("[INFO] Disabling NoMount for safety...");
-        let _ = fs::write(
-            Path::new(defs::NOMOUNT_MODULE_DIR).join(defs::DISABLE_FILE_NAME),
-            "",
-        );
+        // Disabling the feature is just clearing the enable marker now that
+        // there is no module dir / disable marker to maintain.
         let _ = fs::remove_file(defs::NOMOUNT_ENABLE_FILE);
         let _ = fs::remove_file(semaphore);
         return Ok(());
@@ -342,11 +279,22 @@ pub fn inject_at_boot() -> Result<()> {
     Ok(())
 }
 
+/// Clear the boot semaphore once boot has completed (native replacement for
+/// the module's old boot-completed.sh). Idempotent.
+pub fn boot_completed() {
+    let semaphore = Path::new(defs::NOMOUNT_BOOT_SEMAPHORE);
+    if semaphore.exists() {
+        let _ = fs::remove_file(semaphore);
+        nomount_inject::log_append("[OK] Boot completed safely.");
+    }
+}
+
 /// Disable the built-in NoMount feature.
 pub fn disable() -> Result<()> {
-    let disable = Path::new(defs::NOMOUNT_MODULE_DIR).join(defs::DISABLE_FILE_NAME);
-    utils::ensure_file_exists(disable)?;
-    let _ = metamodule::remove_symlink();
+    // Fully built in: disabling is just clearing the enable marker (plus the
+    // boot semaphore, if a boot is still in progress). No module dir or
+    // metamodule symlink to touch.
+    let _ = fs::remove_file(defs::NOMOUNT_BOOT_SEMAPHORE);
     let _ = fs::remove_file(defs::NOMOUNT_ENABLE_FILE);
     info!("NoMount disabled");
     Ok(())
@@ -355,14 +303,14 @@ pub fn disable() -> Result<()> {
 /// Best-effort re-provisioning hook called at post-fs-data.
 ///
 /// The manager writes the enable marker when the toggle is turned on; on the
-/// next boot we re-materialize the module dir (e.g. after an APatch upgrade or
-/// a wiped module dir) so the feature stays active without user intervention.
+/// next boot we re-materialize the data dir (e.g. after an APatch upgrade) so
+/// the feature stays active without user intervention.
 pub fn provision_if_enabled() {
     if !is_enabled() {
         return;
     }
     if let Err(e) = ensure_active() {
-        warn!("nomount: failed to provision built-in metamodule: {e:#}");
+        warn!("nomount: failed to provision built-in feature: {e:#}");
     }
 }
 

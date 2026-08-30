@@ -115,16 +115,6 @@ pub fn check_install_safety() -> Result<(), bool> {
         return Ok(());
     }
 
-    // Built-in NoMount exemption: when the manager toggle is off the module
-    // carries a `disable` marker, but this must NOT block regular module
-    // installs — they simply fall back to the default OverlayFS handling.
-    if metamodule_path == Path::new(defs::NOMOUNT_MODULE_DIR)
-        && has_disable
-        && !Path::new(defs::NOMOUNT_ENABLE_FILE).exists()
-    {
-        return Ok(());
-    }
-
     // Return true if disabled, false for other unstable states
     Err(has_disable && !has_update && !has_remove)
 }

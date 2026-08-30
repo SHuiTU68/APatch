@@ -371,41 +371,34 @@ pub fn ensure_kernel_support() -> Result<bool> {
         return Ok(true);
     }
 
-    let data_lkm = Path::new(defs::NOMOUNT_DATA_DIR).join("lkm");
-    let module_lkm = Path::new(defs::NOMOUNT_MODULE_DIR).join("lkm");
+    let lkm_dir = Path::new(defs::NOMOUNT_DATA_DIR).join("lkm");
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // 1. Exact KMI match: nomount-<androidX-Y.Z>.ko
     if let Some(kmi) = late_load::detect_kmi() {
-        for dir in [&data_lkm, &module_lkm] {
-            let p = dir.join(format!("nomount-{kmi}.ko"));
-            if p.exists() {
-                candidates.push(p);
-            }
+        let p = lkm_dir.join(format!("nomount-{kmi}.ko"));
+        if p.exists() {
+            candidates.push(p);
         }
     }
     // 2. Kernel-version glob fallback: nomount-*-5.15.ko
     if let Some(kver) = kernel_version_only() {
-        for dir in [&data_lkm, &module_lkm] {
-            if let Ok(rd) = fs::read_dir(dir) {
-                for e in rd.flatten() {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if name.starts_with("nomount-")
-                        && name.ends_with(".ko")
-                        && name.contains(&kver)
-                    {
-                        candidates.push(e.path());
-                    }
+        if let Ok(rd) = fs::read_dir(&lkm_dir) {
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if name.starts_with("nomount-")
+                    && name.ends_with(".ko")
+                    && name.contains(&kver)
+                {
+                    candidates.push(e.path());
                 }
             }
         }
     }
     // 3. Plain nomount.ko
-    for dir in [&data_lkm, &module_lkm] {
-        let p = dir.join("nomount.ko");
-        if p.exists() {
-            candidates.push(p);
-        }
+    let p = lkm_dir.join("nomount.ko");
+    if p.exists() {
+        candidates.push(p);
     }
 
     for ko in candidates {
