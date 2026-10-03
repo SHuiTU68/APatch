@@ -27,9 +27,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.dropUnlessResumed
@@ -38,12 +40,14 @@ import com.ramcosta.composedestinations.annotation.RootGraph
 import com.ramcosta.composedestinations.generated.destinations.PatchesDestination
 import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.bmax.apatch.R
 import me.bmax.apatch.ui.component.WarningCard
 import me.bmax.apatch.ui.component.rememberConfirmDialog
 import me.bmax.apatch.ui.viewmodel.PatchesViewModel
 import me.bmax.apatch.util.isABDevice
+import me.bmax.apatch.util.isInitBootImage
 import me.bmax.apatch.util.isJailbreakMode
 import me.bmax.apatch.util.rootAvailable
 
@@ -76,17 +80,17 @@ fun InstallModeSelectScreen(navigator: DestinationsNavigator) {
 }
 
 sealed class InstallMethod {
+    // One entry for both kinds of image: the file itself says whether it is a
+    // kernel image (`boot.img`, patched by kptools) or a first stage ramdisk
+    // (`init_boot.img`, patched by kpramdisk), so the user does not have to
+    // know which one their device ships.
     data class SelectFile(
         val uri: Uri? = null,
         @param:StringRes override val label: Int = R.string.mode_select_page_select_file,
-    ) : InstallMethod()
-
-    // The first stage ramdisk (init_boot) is patched by kpramdisk rather than by
-    // kptools, so it is picked as a separate kind of image.
-    data class SelectInitBootFile(
-        val uri: Uri? = null,
-        @param:StringRes override val label: Int = R.string.mode_select_page_select_init_boot,
-    ) : InstallMethod()
+    ) : InstallMethod() {
+        override val summary: Int
+            get() = R.string.mode_select_page_select_file_summary
+    }
 
     data object DirectInstall : InstallMethod() {
         override val label: Int
@@ -133,7 +137,7 @@ private fun SelectInstallMethod(
     }
 
     val radioOptions =
-        mutableListOf<InstallMethod>(InstallMethod.SelectFile(), InstallMethod.SelectInitBootFile())
+        mutableListOf<InstallMethod>(InstallMethod.SelectFile())
     if (rootAvailable) {
         radioOptions.add(InstallMethod.DirectInstall)
         radioOptions.add(InstallMethod.RamdiskDirectInstall)
@@ -144,28 +148,28 @@ private fun SelectInstallMethod(
     }
 
     var selectedOption by remember { mutableStateOf<InstallMethod?>(null) }
-    // Which entry the file picker was opened for; the result tells the two
-    // "pick an image yourself" flows apart, as they land on different screens.
-    var pickerRamdisk by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val selectImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
         if (it.resultCode == Activity.RESULT_OK) {
             it.data?.data?.let { uri ->
-                if (pickerRamdisk) {
-                    val option = InstallMethod.SelectInitBootFile(uri)
-                    selectedOption = option
-                    onSelected(option)
-                    selectedBootImage = option.uri
+                val option = InstallMethod.SelectFile(uri)
+                selectedOption = option
+                onSelected(option)
+                selectedBootImage = option.uri
+                // The two images are handed to different patchers, so the
+                // destination is taken from the image header instead of asking
+                // the user. An unreadable header falls back to the kernel path.
+                scope.launch {
+                    val initBoot = withContext(Dispatchers.IO) { isInitBootImage(context, uri) } == true
                     navigator.navigate(
-                        PatchesDestination(PatchesViewModel.PatchMode.RAMDISK_PATCH_ONLY)
+                        PatchesDestination(
+                            if (initBoot) PatchesViewModel.PatchMode.RAMDISK_PATCH_ONLY
+                            else PatchesViewModel.PatchMode.PATCH_ONLY
+                        )
                     )
-                } else {
-                    val option = InstallMethod.SelectFile(uri)
-                    selectedOption = option
-                    onSelected(option)
-                    selectedBootImage = option.uri
-                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
                 }
             }
         }
@@ -184,17 +188,6 @@ private fun SelectInstallMethod(
             is InstallMethod.SelectFile -> {
                 // Reset before selecting
                 selectedBootImage = null
-                pickerRamdisk = false
-                selectImageLauncher.launch(
-                    Intent(Intent.ACTION_GET_CONTENT).apply {
-                        type = "application/octet-stream"
-                    }
-                )
-            }
-
-            is InstallMethod.SelectInitBootFile -> {
-                selectedBootImage = null
-                pickerRamdisk = true
                 selectImageLauncher.launch(
                     Intent(Intent.ACTION_GET_CONTENT).apply {
                         type = "application/octet-stream"

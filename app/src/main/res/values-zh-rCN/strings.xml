@@ -164,6 +164,7 @@
     <string name="mode_select_page_title">安装</string>
     <string name="mode_select_page_patch_and_install">直接安装（通常选择此项）</string>
     <string name="mode_select_page_select_file">选取要修补的启动映像文件</string>
+    <string name="mode_select_page_select_file_summary">boot.img 或 init_boot.img，自动识别类型</string>
     <string name="mode_select_page_install_inactive_slot">修补另一槽位内核（用于 OTA 之后）</string>
     <string name="mode_select_page_select_init_boot">选取要修补的 init_boot 镜像（第一阶段 ramdisk）</string>
     <string name="mode_select_page_ramdisk_install">直接安装 init_boot（ramdisk）</string>
