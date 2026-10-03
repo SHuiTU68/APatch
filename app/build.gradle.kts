@@ -250,6 +250,17 @@ registerDownloadTask(
     project = project
 )
 
+// Ramdisk (init_boot) delivery path: kpinit is the static PID 1 hook that
+// loads <kmi>_kernelpatch.ko from the ramdisk and then hands over to the real
+// init (same idea as KernelSU's ksuinit / Magisk's magiskinit). It is shipped
+// as an asset so the patcher can inject it into an init_boot ramdisk.
+registerDownloadTask(
+    taskName = "downloadKpinit",
+    srcUrl = "https://github.com/$kernelPatchRepo/releases/download/$kernelPatchVersion/kpinit-android",
+    destPath = "${project.projectDir}/src/main/assets/kpinit",
+    project = project
+)
+
 // Compat kp version less than 0.10.7
 // TODO: Remove in future
 // NOTE: kept on the upstream repo on purpose - the 0.10.7 release only exists
@@ -367,6 +378,7 @@ tasks.getByName("preBuild").dependsOn(
     "downloadKpimg",
     "patchKpimg",
     "downloadKptools",
+    "downloadKpinit",
     "downloadCompatKpatch",
     "downloadJailbreakKo",
     "mergeScripts",
