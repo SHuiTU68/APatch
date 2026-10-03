@@ -74,6 +74,8 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
         private const val BUSYBOX_BIN_PATH = APATCH_BIN_FOLDER + "busybox"
         private const val RESETPROP_BIN_PATH = APATCH_BIN_FOLDER + "resetprop"
         private const val KPTOOLS_BIN_PATH = APATCH_BIN_FOLDER + "kptools"
+        /** Ramdisk (init_boot) patcher, used to inject kpinit + kernelpatch.ko. */
+        private const val KPRAMDISK_BIN_PATH = APATCH_BIN_FOLDER + "kpramdisk"
         const val DEFAULT_SCONTEXT = "u:r:untrusted_app:s0"
         const val MAGISK_SCONTEXT = "u:r:magisk:s0"
 
@@ -151,6 +153,10 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
                 "chmod +x $BUSYBOX_BIN_PATH",
                 "cp -f ${nativeDir}/libkptools.so $KPTOOLS_BIN_PATH",
                 "chmod +x $KPTOOLS_BIN_PATH",
+                // ramdisk (init_boot) patcher: kpramdisk inject <img> <out>
+                //   --init kpinit --ko <kmi>_kernelpatch.ko
+                "cp -f ${nativeDir}/libkpramdisk.so $KPRAMDISK_BIN_PATH",
+                "chmod +x $KPRAMDISK_BIN_PATH",
 
 
 

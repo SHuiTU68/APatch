@@ -261,6 +261,17 @@ registerDownloadTask(
     project = project
 )
 
+// The other half of the ramdisk path: `kpramdisk` is what puts kpinit and the
+// kernelpatch.ko into an init_boot ramdisk (the counterpart of `ksud
+// boot_patch`). It is shipped as a native lib next to kptools so the patcher can
+// inject a ramdisk on the device itself.
+registerDownloadTask(
+    taskName = "downloadKpramdisk",
+    srcUrl = "https://github.com/$kernelPatchRepo/releases/download/$kernelPatchVersion/kpramdisk-android",
+    destPath = "${project.projectDir}/libs/arm64-v8a/libkpramdisk.so",
+    project = project
+)
+
 // Compat kp version less than 0.10.7
 // TODO: Remove in future
 // NOTE: kept on the upstream repo on purpose - the 0.10.7 release only exists
@@ -379,6 +390,7 @@ tasks.getByName("preBuild").dependsOn(
     "patchKpimg",
     "downloadKptools",
     "downloadKpinit",
+    "downloadKpramdisk",
     "downloadCompatKpatch",
     "downloadJailbreakKo",
     "mergeScripts",

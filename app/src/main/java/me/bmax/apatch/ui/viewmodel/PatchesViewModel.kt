@@ -86,7 +86,10 @@ class PatchesViewModel : ViewModel() {
         patchDir.deleteRecursively()
         patchDir.mkdirs()
         val execs = listOf(
-            "libkptools.so", "libbusybox.so", "libkpatch.so", "libbootctl.so"
+            "libkptools.so", "libbusybox.so", "libkpatch.so", "libbootctl.so",
+            // ramdisk (init_boot) patcher: `./kpramdisk inject` puts kpinit and
+            // the kernelpatch.ko into a ramdisk image.
+            "libkpramdisk.so"
         )
         error = ""
 
