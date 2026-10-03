@@ -251,6 +251,32 @@ find_boot_image() {
   [ -z $BOOTIMAGE ] || echo "BOOTIMAGE=$BOOTIMAGE"
 }
 
+# After calling this method, the following variables will be set:
+# SLOT, RAMDISKIMAGE
+#
+# Locate the partition holding the first stage ramdisk. GKI devices moved it out
+# of boot into init_boot, so that is what we look for first; devices that keep it
+# in the kernel image fall back to boot, which `kpramdisk inject` handles as well.
+find_ramdisk_image() {
+  if [ ! -z $SLOT ]; then
+    RAMDISKIMAGE=$(find_block "init_boot$SLOT")
+  fi
+  if [ -z $RAMDISKIMAGE ]; then
+    RAMDISKIMAGE=$(find_block init_boot_a init_boot)
+  fi
+  if [ -z $RAMDISKIMAGE ]; then
+    RAMDISKIMAGE=$(find_block "boot$SLOT")
+  fi
+  if [ -z $RAMDISKIMAGE ]; then
+    RAMDISKIMAGE=$(find_block kern-a android_boot kernel bootimg boot lnx boot_a)
+  fi
+  if [ -z $RAMDISKIMAGE ]; then
+    # Lets see what fstabs tells me
+    RAMDISKIMAGE=$(grep -v '#' /etc/*fstab* | grep -E '/boot(img)?[^a-zA-Z]' | grep -oE '/dev/[a-zA-Z0-9_./-]*' | head -n 1)
+  fi
+  [ -z $RAMDISKIMAGE ] || echo "RAMDISKIMAGE=$RAMDISKIMAGE"
+}
+
 flash_image() {
   local CMD1
   case "$1" in

@@ -54,13 +54,38 @@ object Natives {
     fun suPath(): String {
         return nativeSuPath(APApplication.superKey)
     }
-
     @FastNative
     private external fun nativeSuUids(superKey: String): IntArray
 
     fun suUids(): IntArray {
         return nativeSuUids(APApplication.superKey)
     }
+
+    /**
+     * The SELinux domain KernelPatch currently grants root in, or "" when the
+     * kernel has no all-allow context (pre-0.13.9, or the AVC bypass could not
+     * be installed — in both cases permissions still come from the magisk
+     * domain).
+     */
+    @FastNative
+    private external fun nativeGetAllAllowSctx(superKey: String): String
+
+    fun allAllowSctx(): String {
+        return nativeGetAllAllowSctx(APApplication.superKey)
+    }
+
+    /**
+     * Retarget the all-allow domain at runtime. Returns 0 only when the kernel
+     * armed the requested context; a negative value means the device can not
+     * use it (no bypass, or the context does not resolve) and has to stay on
+     * the previous one.
+     */
+    private external fun nativeSetAllAllowSctx(superKey: String, scontext: String): Long
+
+    fun setAllAllowSctx(scontext: String): Long {
+        return nativeSetAllAllowSctx(APApplication.superKey, scontext)
+    }
+
 
     @FastNative
     private external fun nativeKernelPatchVersion(superKey: String): Long

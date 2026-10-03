@@ -81,9 +81,27 @@ sealed class InstallMethod {
         @param:StringRes override val label: Int = R.string.mode_select_page_select_file,
     ) : InstallMethod()
 
+    // The first stage ramdisk (init_boot) is patched by kpramdisk rather than by
+    // kptools, so it is picked as a separate kind of image.
+    data class SelectInitBootFile(
+        val uri: Uri? = null,
+        @param:StringRes override val label: Int = R.string.mode_select_page_select_init_boot,
+    ) : InstallMethod()
+
     data object DirectInstall : InstallMethod() {
         override val label: Int
             get() = R.string.mode_select_page_patch_and_install
+    }
+
+    // KernelPost-style delivery: kpinit + kernelpatch.ko go into the first stage
+    // ramdisk, which is what brings root up on devices whose kernel cannot be
+    // patched directly (and puts su into the kernel domain on boot).
+    data object RamdiskDirectInstall : InstallMethod() {
+        override val label: Int
+            get() = R.string.mode_select_page_ramdisk_install
+
+        override val summary: Int
+            get() = R.string.mode_select_page_ramdisk_install_summary
     }
 
     data object DirectInstallToInactiveSlot : InstallMethod() {
@@ -91,8 +109,15 @@ sealed class InstallMethod {
             get() = R.string.mode_select_page_install_inactive_slot
     }
 
+    data object RamdiskRestore : InstallMethod() {
+        override val label: Int
+            get() = R.string.mode_select_page_restore_init_boot
+    }
+
     abstract val label: Int
-    open val summary: String? = null
+
+    // Resource id of the optional second line; 0 means "no summary".
+    open val summary: Int = 0
 }
 
 @Composable
@@ -108,25 +133,40 @@ private fun SelectInstallMethod(
     }
 
     val radioOptions =
-        mutableListOf<InstallMethod>(InstallMethod.SelectFile())
+        mutableListOf<InstallMethod>(InstallMethod.SelectFile(), InstallMethod.SelectInitBootFile())
     if (rootAvailable) {
         radioOptions.add(InstallMethod.DirectInstall)
+        radioOptions.add(InstallMethod.RamdiskDirectInstall)
+        radioOptions.add(InstallMethod.RamdiskRestore)
         if (isAbDevice) {
             radioOptions.add(InstallMethod.DirectInstallToInactiveSlot)
         }
     }
 
     var selectedOption by remember { mutableStateOf<InstallMethod?>(null) }
+    // Which entry the file picker was opened for; the result tells the two
+    // "pick an image yourself" flows apart, as they land on different screens.
+    var pickerRamdisk by remember { mutableStateOf(false) }
     val selectImageLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) {
         if (it.resultCode == Activity.RESULT_OK) {
             it.data?.data?.let { uri ->
-                val option = InstallMethod.SelectFile(uri)
-                selectedOption = option
-                onSelected(option)
-                selectedBootImage = option.uri
-                navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
+                if (pickerRamdisk) {
+                    val option = InstallMethod.SelectInitBootFile(uri)
+                    selectedOption = option
+                    onSelected(option)
+                    selectedBootImage = option.uri
+                    navigator.navigate(
+                        PatchesDestination(PatchesViewModel.PatchMode.RAMDISK_PATCH_ONLY)
+                    )
+                } else {
+                    val option = InstallMethod.SelectFile(uri)
+                    selectedOption = option
+                    onSelected(option)
+                    selectedBootImage = option.uri
+                    navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_ONLY))
+                }
             }
         }
     }
@@ -144,6 +184,17 @@ private fun SelectInstallMethod(
             is InstallMethod.SelectFile -> {
                 // Reset before selecting
                 selectedBootImage = null
+                pickerRamdisk = false
+                selectImageLauncher.launch(
+                    Intent(Intent.ACTION_GET_CONTENT).apply {
+                        type = "application/octet-stream"
+                    }
+                )
+            }
+
+            is InstallMethod.SelectInitBootFile -> {
+                selectedBootImage = null
+                pickerRamdisk = true
                 selectImageLauncher.launch(
                     Intent(Intent.ACTION_GET_CONTENT).apply {
                         type = "application/octet-stream"
@@ -157,8 +208,22 @@ private fun SelectInstallMethod(
                 navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.PATCH_AND_INSTALL))
             }
 
+            is InstallMethod.RamdiskDirectInstall -> {
+                selectedOption = option
+                onSelected(option)
+                navigator.navigate(
+                    PatchesDestination(PatchesViewModel.PatchMode.RAMDISK_PATCH_AND_INSTALL)
+                )
+            }
+
             is InstallMethod.DirectInstallToInactiveSlot -> {
                 confirmDialog.showConfirm(dialogTitle, dialogContent)
+            }
+
+            is InstallMethod.RamdiskRestore -> {
+                selectedOption = option
+                onSelected(option)
+                navigator.navigate(PatchesDestination(PatchesViewModel.PatchMode.RAMDISK_UNPATCH))
             }
         }
     }
@@ -199,9 +264,9 @@ private fun SelectInstallMethod(
                         fontFamily = MaterialTheme.typography.titleMedium.fontFamily,
                         fontStyle = MaterialTheme.typography.titleMedium.fontStyle
                     )
-                    option.summary?.let {
+                    option.summary.takeIf { it != 0 }?.let {
                         Text(
-                            text = it,
+                            text = stringResource(id = it),
                             fontSize = MaterialTheme.typography.bodySmall.fontSize,
                             fontFamily = MaterialTheme.typography.bodySmall.fontFamily,
                             fontStyle = MaterialTheme.typography.bodySmall.fontStyle

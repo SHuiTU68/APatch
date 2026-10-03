@@ -177,40 +177,61 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
             ErrorView(viewModel.error)
             KernelPatchImageView(viewModel.kpimgInfo)
 
+            // The two "user picks the image" modes; the others read the partition themselves.
+            val selectableMode =
+                mode == PatchesViewModel.PatchMode.PATCH_ONLY ||
+                        mode == PatchesViewModel.PatchMode.RAMDISK_PATCH_ONLY
+
             // Consume a boot image chosen on the install-mode screen exactly once;
             // calling copyAndParseBootimg in composition refires per recomposition.
             LaunchedEffect(selectedBootImage) {
                 val bootImage = selectedBootImage
-                if (mode == PatchesViewModel.PatchMode.PATCH_ONLY && bootImage != null && viewModel.kimgInfo.banner.isEmpty()) {
+                if (selectableMode && bootImage != null && !viewModel.imageReady) {
                     viewModel.copyAndParseBootimg(bootImage)
-                    // Fix endless loop. It's not normal if (parse done && working thread is not working) but banner still null
+                    // Fix endless loop. It's not normal if (parse done && working thread is not working) but the image still unusable
                     // Leave user re-choose
-                    if (!viewModel.running && viewModel.kimgInfo.banner.isEmpty()) {
+                    if (!viewModel.running && !viewModel.imageReady) {
                         selectedBootImage = null
                     }
                 }
             }
 
-            // select boot.img
-            if (mode == PatchesViewModel.PatchMode.PATCH_ONLY && viewModel.kimgInfo.banner.isEmpty()) {
+            // select boot.img / init_boot.img
+            if (selectableMode && !viewModel.imageReady) {
                 SelectFileButton(
-                    text = stringResource(id = R.string.patch_select_bootimg_btn),
+                    text = stringResource(
+                        id = if (mode.ramdisk) R.string.patch_select_init_boot_btn
+                        else R.string.patch_select_bootimg_btn
+                    ),
                     onSelected = { data, uri ->
-                        Log.d(TAG, "select boot.img, data: $data, uri: $uri")
+                        Log.d(TAG, "select image, data: $data, uri: $uri")
                         viewModel.copyAndParseBootimg(uri)
                     }
                 )
             }
 
             if (viewModel.bootSlot.isNotEmpty() || viewModel.bootDev.isNotEmpty()) {
-                BootimgView(slot = viewModel.bootSlot, boot = viewModel.bootDev)
+                BootimgView(
+                    slot = viewModel.bootSlot,
+                    boot = viewModel.bootDev,
+                    title = stringResource(
+                        id = if (mode.ramdisk) R.string.patch_item_init_boot
+                        else R.string.patch_item_bootimg
+                    )
+                )
             }
 
             if (viewModel.kimgInfo.banner.isNotEmpty()) {
                 KernelImageView(viewModel.kimgInfo)
             }
 
-            if (mode != PatchesViewModel.PatchMode.UNPATCH && viewModel.kimgInfo.banner.isNotEmpty()) {
+            // An init_boot ramdisk has no kernel banner: what the user is about to
+            // patch is the first stage ramdisk, so show what kpramdisk found in it.
+            if (mode.ramdisk && viewModel.ramdiskInfo.isNotEmpty()) {
+                RamdiskImageView(viewModel.ramdiskInfo)
+            }
+
+            if (!mode.ramdisk && !mode.isUnpatch && viewModel.kimgInfo.banner.isNotEmpty()) {
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.elevatedCardColors(
@@ -250,8 +271,9 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 })
             }
 
-            // add new extras
-            if (mode != PatchesViewModel.PatchMode.UNPATCH) {
+            // add new extras; a ramdisk patch injects kpinit + the LKM only, so
+            // there is no place to attach an embedded KPM.
+            if (!mode.ramdisk && !mode.isUnpatch) {
                 viewModel.newExtras.forEach(action = {
                     ExtraItem(extra = it, false, onDelete = {
                         val idx = viewModel.newExtras.indexOf(it)
@@ -261,8 +283,8 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
                 })
             }
 
-            // add new KPM
-            if (!viewModel.patching && !viewModel.patchdone && mode != PatchesViewModel.PatchMode.UNPATCH) {
+            // add new KPM (boot image path only)
+            if (!mode.ramdisk && !viewModel.patching && !viewModel.patchdone && !mode.isUnpatch) {
                 SelectFileButton(
                     text = stringResource(id = R.string.patch_embed_kpm_btn),
                     onSelected = { data, uri ->
@@ -275,16 +297,18 @@ fun Patches(mode: PatchesViewModel.PatchMode) {
             // do patch, update, unpatch
             if (!viewModel.patching && !viewModel.patchdone) {
                 // patch start
-                if (mode != PatchesViewModel.PatchMode.UNPATCH) {
+                if (!mode.isUnpatch) {
                     val isKeyReady = !needKey || viewModel.superkey.isNotEmpty()
-                    if (isKeyReady) {
+                    // A ramdisk has no kernel banner, so gate on its own readiness.
+                    val isImageReady = !mode.ramdisk || viewModel.imageReady
+                    if (isKeyReady && isImageReady) {
                         StartButton(stringResource(id = R.string.patch_start_patch_btn)) {
                             viewModel.doPatch(mode, needKey)
                         }
                     }
                 }
                 // unpatch
-                if (mode == PatchesViewModel.PatchMode.UNPATCH && viewModel.kimgInfo.banner.isNotEmpty()) {
+                if (mode.isUnpatch && viewModel.imageReady) {
                     StartButton(stringResource(id = R.string.patch_start_unpatch_btn)) { viewModel.doUnpatch() }
                 }
             }
@@ -600,7 +624,7 @@ private fun KernelPatchImageView(kpImgInfo: KPModel.KPImgInfo) {
 }
 
 @Composable
-private fun BootimgView(slot: String, boot: String) {
+private fun BootimgView(slot: String, boot: String, title: String) {
     ElevatedCard(
         colors = CardDefaults.elevatedCardColors(containerColor = run {
             MaterialTheme.colorScheme.secondaryContainer
@@ -617,7 +641,7 @@ private fun BootimgView(slot: String, boot: String) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = stringResource(id = R.string.patch_item_bootimg),
+                    text = title,
                     style = MaterialTheme.typography.bodyLarge
                 )
             }
@@ -658,6 +682,33 @@ private fun KernelImageView(kImgInfo: KPModel.KImgInfo) {
                 )
             }
             Text(text = kImgInfo.banner, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+@Composable
+private fun RamdiskImageView(ramdiskInfo: String) {
+    ElevatedCard(
+        colors = CardDefaults.elevatedCardColors(containerColor = run {
+            MaterialTheme.colorScheme.secondaryContainer
+        })
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = stringResource(id = R.string.patch_item_ramdisk),
+                    style = MaterialTheme.typography.bodyLarge
+                )
+            }
+            Text(text = ramdiskInfo, style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

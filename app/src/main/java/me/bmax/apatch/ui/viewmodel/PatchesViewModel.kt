@@ -33,6 +33,7 @@ import me.bmax.apatch.util.copyAndClose
 import me.bmax.apatch.util.copyAndCloseOut
 import me.bmax.apatch.util.createRootShell
 import me.bmax.apatch.util.inputStream
+import me.bmax.apatch.util.jailbreakAssetName
 import me.bmax.apatch.util.shellForResult
 import me.bmax.apatch.util.writeTo
 import org.ini4j.Ini
@@ -45,13 +46,37 @@ import java.io.StringReader
 
 private const val TAG = "PatchViewModel"
 
+/**
+ * Payload file names used inside the patch dir. `kpinit` and the KernelPatch LKM
+ * are extracted from the apk assets when a ramdisk mode is chosen; kpramdisk
+ * injects them under their fixed entry names (`init`, `kernelpatch.ko`).
+ */
+private const val RAMDISK_KPINIT = "kpinit"
+private const val RAMDISK_KO = "kernelpatch.ko"
+
+/** Copy of the stock ramdisk, kept in the patch dir and in /data/adb/ap. */
+private const val RAMDISK_ORI = "ori_init_boot.img"
+
 class PatchesViewModel : ViewModel() {
 
-    enum class PatchMode(val sId: Int) {
+    /**
+     * [ramdisk] selects the delivery path: kernel image patching through kptools
+     * (`boot.img`), or first stage ramdisk patching through kpramdisk
+     * (`init_boot`, the KernelSU-style LKM path).
+     */
+    enum class PatchMode(val sId: Int, val ramdisk: Boolean = false) {
         PATCH_ONLY(R.string.patch_mode_bootimg_patch),
         PATCH_AND_INSTALL(R.string.patch_mode_patch_and_install),
         INSTALL_TO_NEXT_SLOT(R.string.patch_mode_install_to_next_slot),
-        UNPATCH(R.string.patch_mode_uninstall_patch)
+        UNPATCH(R.string.patch_mode_uninstall_patch),
+
+        RAMDISK_PATCH_ONLY(R.string.patch_mode_ramdisk_patch, ramdisk = true),
+        RAMDISK_PATCH_AND_INSTALL(R.string.patch_mode_ramdisk_patch_and_install, ramdisk = true),
+        RAMDISK_UNPATCH(R.string.patch_mode_ramdisk_uninstall, ramdisk = true);
+
+        /** True for the modes that remove a previously applied patch. */
+        val isUnpatch: Boolean
+            get() = this == UNPATCH || this == RAMDISK_UNPATCH
     }
 
     var bootSlot by mutableStateOf("")
@@ -59,6 +84,15 @@ class PatchesViewModel : ViewModel() {
     var kimgInfo by mutableStateOf(KPModel.KImgInfo("", false))
     var kpimgInfo by mutableStateOf(KPModel.KPImgInfo("", "", "", "", ""))
     var superkey by mutableStateOf("")
+
+    /** `kpramdisk info`/`list` output of the ramdisk selected in a ramdisk mode. */
+    var ramdiskInfo by mutableStateOf("")
+
+    /** `/dev/block/...` of the first stage ramdisk partition (init_boot usually). */
+    var ramdiskDev by mutableStateOf("")
+    var ramdiskReady by mutableStateOf(false)
+    var ramdiskPatched by mutableStateOf(false)
+
     var existedExtras = mutableStateListOf<KPModel.IExtraInfo>()
     var newExtras = mutableStateListOf<KPModel.IExtraInfo>()
     var newExtrasFileName = mutableListOf<String>()
@@ -81,6 +115,14 @@ class PatchesViewModel : ViewModel() {
     private val workMutex = Mutex()
 
     private var entryMode: PatchMode = PatchMode.PATCH_ONLY
+
+    /**
+     * Whether the image the current mode patches has been read successfully.
+     * A ramdisk has no kernel banner to look at, so the two paths report
+     * readiness differently.
+     */
+    val imageReady: Boolean
+        get() = if (entryMode.ramdisk) ramdiskReady else kimgInfo.banner.isNotEmpty()
 
     private fun prepare() {
         patchDir.deleteRecursively()
@@ -111,6 +153,19 @@ class PatchesViewModel : ViewModel() {
             apApp.assets.open(script).writeTo(dest)
         }
 
+        // The ramdisk path injects kpinit and the LKM matching the running
+        // kernel, both of which ship inside the apk.
+        if (entryMode.ramdisk) {
+            try {
+                apApp.assets.open(RAMDISK_KPINIT).writeTo(File(patchDir, RAMDISK_KPINIT))
+                val koName = jailbreakAssetName()
+                    ?: throw IOException("cannot derive the KMI from ${Os.uname().release}")
+                apApp.assets.open(koName).writeTo(File(patchDir, RAMDISK_KO))
+            } catch (e: Exception) {
+                error += "ramdisk payload missing: ${e.message}\n"
+            }
+        }
+
     }
 
     private fun parseKpimg() {
@@ -138,6 +193,12 @@ class PatchesViewModel : ViewModel() {
     }
 
     private fun parseBootimg(bootimg: String) {
+        if (entryMode.ramdisk) {
+            // No kernel to unpack in init_boot; kpramdisk reads the ramdisk.
+            error = ""
+            parseRamdiskImg(bootimg)
+            return
+        }
         val result = shellForResult(
             shell,
             "cd $patchDir",
@@ -232,6 +293,8 @@ class PatchesViewModel : ViewModel() {
 
         if (mode == PatchMode.INSTALL_TO_NEXT_SLOT) {
             cmdBuilder += " true"
+        } else if (mode.ramdisk) {
+            cmdBuilder += " ramdisk"
         }
 
         val result = shellForResult(
@@ -247,6 +310,21 @@ class PatchesViewModel : ViewModel() {
             } else {
                 result.out.filter { it.startsWith("SLOT=") }[0].removePrefix("SLOT=")
             }
+            if (mode.ramdisk) {
+                val dev = result.out.filter { it.startsWith("RAMDISKIMAGE=") }
+                if (dev.isEmpty()) {
+                    error = "- can't find init_boot.img!\n"
+                    running = false
+                    return
+                }
+                ramdiskDev = dev[0].removePrefix("RAMDISKIMAGE=")
+                bootDev = ramdiskDev
+                Log.i(TAG, "current ramdisk: $ramdiskDev")
+                srcBoot = FileSystemManager.getLocal().getFile(ramdiskDev)
+                parseBootimg(ramdiskDev)
+                running = false
+                return
+            }
             bootDev =
                 result.out.filter { it.startsWith("BOOTIMAGE=") }[0].removePrefix("BOOTIMAGE=")
             Log.i(TAG, "current slot: $bootSlot")
@@ -259,6 +337,34 @@ class PatchesViewModel : ViewModel() {
         running = false
     }
 
+    /**
+     * Read a first stage ramdisk with kpramdisk instead of kptools: there is no
+     * kernel to unpack, and the entries decide whether the image is usable and
+     * whether it already carries a KernelPatch LKM.
+     */
+    private fun parseRamdiskImg(ramdisk: String) {
+        val info = shellForResult(shell, "cd $patchDir", "./kpramdisk info $ramdisk")
+        val list = shellForResult(shell, "cd $patchDir", "./kpramdisk list $ramdisk")
+        if (!list.isSuccess) {
+            error = (info.err + list.err).joinToString("\n")
+            ramdiskReady = false
+            return
+        }
+        val entries = list.out.mapNotNull { line ->
+            val fields = line.trim().split(Regex("\\s+"))
+            // `<type><mode> <size> <name>[ -> <target>]`
+            if (fields.size >= 4) fields[3] else null
+        }
+        if (!entries.contains("init")) {
+            error = "- no first stage `init` in $ramdisk, this is not an init_boot ramdisk\n"
+            ramdiskReady = false
+            return
+        }
+        ramdiskPatched = entries.contains(RAMDISK_KO)
+        ramdiskInfo = (info.out + list.out).joinToString("\n")
+        ramdiskReady = true
+    }
+
     // Runs the one-time initialization with the caller already holding
     // workMutex. Every patchDir consumer funnels through this so ordering does
     // not depend on which fire-and-forget coroutine grabs the lock first.
@@ -269,10 +375,14 @@ class PatchesViewModel : ViewModel() {
         running = true
         try {
             prepare()
-            if (entryMode != PatchMode.UNPATCH) {
+            if (!entryMode.isUnpatch) {
                 parseKpimg()
             }
-            if (entryMode == PatchMode.PATCH_AND_INSTALL || entryMode == PatchMode.UNPATCH || entryMode == PatchMode.INSTALL_TO_NEXT_SLOT) {
+            if (entryMode == PatchMode.PATCH_AND_INSTALL || entryMode == PatchMode.UNPATCH || entryMode == PatchMode.INSTALL_TO_NEXT_SLOT ||
+                entryMode == PatchMode.RAMDISK_PATCH_AND_INSTALL || entryMode == PatchMode.RAMDISK_UNPATCH
+            ) {
+                // Ramdisk modes read the ramdisk partition directly;
+                // RAMDISK_PATCH_ONLY waits for the file the user picks instead.
                 extractAndParseBootimg(entryMode)
             }
             prepared = true
@@ -354,6 +464,10 @@ class PatchesViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             workMutex.withLock {
                 if (!ensurePrepared()) return@withLock
+                if (entryMode.ramdisk) {
+                    doUnpatchRamdisk()
+                    return@withLock
+                }
                 patching = true
                 try {
                     patchLog = ""
@@ -402,6 +516,10 @@ class PatchesViewModel : ViewModel() {
         viewModelScope.launch(Dispatchers.IO) {
             workMutex.withLock {
                 if (!ensurePrepared()) return@withLock
+                if (mode.ramdisk) {
+                    doPatchRamdisk(mode)
+                    return@withLock
+                }
                 patching = true
                 try {
                     Log.d(TAG, "starting patching...")
@@ -428,10 +546,9 @@ class PatchesViewModel : ViewModel() {
 
                     if (mode == PatchMode.PATCH_AND_INSTALL || mode == PatchMode.INSTALL_TO_NEXT_SLOT) {
 
-                        val KPCheck = shell.newJob().add("truncate ${APApplication.superKey} -Z u:r:magisk:s0 -c whoami").exec()
-
+                        val KPCheck = shell.newJob().add("truncate ${APApplication.superKey} -Z ${APApplication.allAllowScontext} -c whoami").exec()
                         if (KPCheck.isSuccess && !isSuExecutable()) {
-                            patchCommand.addAll(0, listOf("truncate", APApplication.superKey, "-Z", APApplication.MAGISK_SCONTEXT, "-c"))
+                            patchCommand.addAll(0, listOf("truncate", APApplication.superKey, "-Z", APApplication.allAllowScontext, "-c"))
                             patchCommand.addAll(listOf(superkey, srcBoot.path, "true"))
                         } else {
                             patchCommand = mutableListOf("./busybox", "sh", "boot_patch.sh")
@@ -569,24 +686,7 @@ class PatchesViewModel : ViewModel() {
                         needReboot = true
                         APApplication.markNeedReboot()
                     } else if (mode == PatchMode.PATCH_ONLY) {
-                        val newBootFile = patchDir.getChildFile("new-boot.img")
-                        val outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                        if (!outDir.exists()) outDir.mkdirs()
-                        val outPath = File(outDir, outFilename)
-                        val inputUri = newBootFile.getUri(apApp)
-
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            val outUri = createDownloadUri(apApp, outFilename)
-                            succ = insertDownload(apApp, outUri, inputUri)
-                        } else {
-                            newBootFile.inputStream().copyAndClose(outPath.outputStream())
-                        }
-                        if (succ) {
-                            logs.add(" Output file is written to ")
-                            logs.add(" ${outPath.path}")
-                        } else {
-                            logs.add(" Write patched boot.img failed")
-                        }
+                        succ = writePatchedImageToDownloads(outFilename, logs)
                     }
                     logs.add("****************************")
                     patchdone = true
@@ -595,6 +695,196 @@ class PatchesViewModel : ViewModel() {
                     patching = false
                 }
             }
+        }
+    }
+
+    /**
+     * Write the image produced in the patch dir to the public Downloads folder,
+     * through MediaStore on API 29+ so no storage permission is needed.
+     */
+    private fun writePatchedImageToDownloads(
+        outFilename: String,
+        logs: CallbackList<String>,
+    ): Boolean {
+        val newBootFile = patchDir.getChildFile("new-boot.img")
+        val outDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        if (!outDir.exists()) outDir.mkdirs()
+        val outPath = File(outDir, outFilename)
+        val inputUri = newBootFile.getUri(apApp)
+
+        val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val outUri = createDownloadUri(apApp, outFilename)
+            insertDownload(apApp, outUri, inputUri)
+        } else {
+            newBootFile.inputStream().copyAndClose(outPath.outputStream())
+            true
+        }
+        if (ok) {
+            logs.add(" Output file is written to ")
+            logs.add(" ${outPath.path}")
+        } else {
+            logs.add(" Write patched image failed")
+        }
+        return ok
+    }
+
+    /**
+     * Ramdisk delivery path: kpramdisk injects kpinit and the KMI-matched
+     * kernelpatch.ko into the first stage ramdisk, which is where a GKI device
+     * loads the KernelPatch LKM from (init_boot).
+     *
+     * The source image is copied to a regular file first, because kpramdisk
+     * needs a seekable file while a ramdisk partition is a block device.
+     */
+    private fun doPatchRamdisk(mode: PatchMode) {
+        patching = true
+        try {
+            patchLog = ""
+            error = ""
+
+            val logs = object : CallbackList<String>() {
+                override fun onAddElement(e: String?) {
+                    patchLog += e
+                    Log.d(TAG, "" + e)
+                    patchLog += "\n"
+                }
+            }
+            logs.add("****************************")
+            logs.add(" KernelPatch ramdisk (init_boot) patcher")
+            logs.add("****************************")
+
+            val kpinit = File(patchDir, RAMDISK_KPINIT)
+            val ko = File(patchDir, RAMDISK_KO)
+            if (!kpinit.exists() || !ko.exists()) {
+                error = "- kpinit / kernelpatch.ko is missing, nothing to inject\n"
+                logs.add(error)
+                logs.add("****************************")
+                return
+            }
+            if (!srcBoot.exists()) {
+                error = "- no ramdisk image selected\n"
+                logs.add(error)
+                logs.add("****************************")
+                return
+            }
+
+            val cmd = "./kpramdisk inject $RAMDISK_ORI new-boot.img" +
+                    " --init $RAMDISK_KPINIT --ko $RAMDISK_KO --force"
+            logs.add("- Injecting KernelPatch into the first stage ramdisk")
+            val result = shell.newJob().add(
+                "export ASH_STANDALONE=1",
+                "cd $patchDir",
+                "cp -f ${srcBoot.path} $RAMDISK_ORI",
+                cmd,
+            ).to(logs, logs).exec()
+
+            if (!result.isSuccess) {
+                error = "- kpramdisk inject failed\n"
+                logs.add(error)
+                logs.add("****************************")
+                return
+            }
+
+            // Keep the stock ramdisk for the restore path, and for installs that
+            // were flashed by hand.
+            shell.newJob().add(
+                "mkdir -p ${APApplication.APATCH_FOLDER}",
+                "cp -f $patchDir/$RAMDISK_ORI ${APApplication.APATCH_FOLDER}$RAMDISK_ORI",
+            ).to(logs, logs).exec()
+
+            if (mode == PatchMode.RAMDISK_PATCH_AND_INSTALL) {
+                if (ramdiskDev.isEmpty()) {
+                    error = "- init_boot partition unknown, cannot flash\n"
+                    logs.add(error)
+                    logs.add("****************************")
+                    return
+                }
+                logs.add("- Flashing the new ramdisk to $ramdiskDev")
+                val flash = shell.newJob().add(
+                    "export ASH_STANDALONE=1",
+                    "cd $patchDir",
+                    "./busybox sh -c '. ./util_functions.sh; flash_image new-boot.img $ramdiskDev'",
+                ).to(logs, logs).exec()
+                if (!flash.isSuccess) {
+                    error = "- flash failed (partition too small or read only?)\n"
+                    logs.add(error)
+                } else {
+                    logs.add("- Reboot to finish, then install APatch from the home screen")
+                    needReboot = true
+                    APApplication.markNeedReboot()
+                }
+            } else {
+                val apVer = Version.getManagerVersion().second
+                val rand = (1..4).map { ('a'..'z').random() }.joinToString("")
+                val outFilename = "apatch_patched_init_boot_${apVer}_${BuildConfig.buildKPV}_${rand}.img"
+                writePatchedImageToDownloads(outFilename, logs)
+                logs.add("- Flash the image to init_boot, then install APatch from the home screen")
+            }
+
+            logs.add("****************************")
+            patchdone = true
+        } finally {
+            patching = false
+        }
+    }
+
+    /**
+     * Restore the stock first stage ramdisk. There is no `kptools` equivalent of
+     * an unpatch for a ramdisk, so the backup taken before injecting is flashed
+     * back verbatim.
+     */
+    private fun doUnpatchRamdisk() {
+        patching = true
+        try {
+            patchLog = ""
+            error = ""
+            Log.i(TAG, "starting ramdisk unpatching...")
+
+            val logs = object : CallbackList<String>() {
+                override fun onAddElement(e: String?) {
+                    patchLog += e
+                    Log.i(TAG, "" + e)
+                    patchLog += "\n"
+                }
+            }
+            logs.add("****************************")
+            logs.add(" KernelPatch ramdisk (init_boot) restore")
+            logs.add("****************************")
+
+            if (ramdiskDev.isEmpty()) {
+                error = "- init_boot partition unknown\n"
+                logs.add(error)
+                logs.add("****************************")
+                return
+            }
+            val backup = "${APApplication.APATCH_FOLDER}$RAMDISK_ORI"
+            val present = shellForResult(shell, "[ -f $backup ] && echo yes")
+            if (!present.out.toString().contains("yes")) {
+                error = "- no stock ramdisk backup at $backup\n"
+                logs.add(error)
+                logs.add("****************************")
+                return
+            }
+
+            val result = shell.newJob().add(
+                "export ASH_STANDALONE=1",
+                "cd $patchDir",
+                "cp -f $backup $RAMDISK_ORI",
+                "./busybox sh -c '. ./util_functions.sh; flash_image $RAMDISK_ORI $ramdiskDev'",
+            ).to(logs, logs).exec()
+
+            if (result.isSuccess) {
+                logs.add(" Restore successful")
+                needReboot = true
+                APApplication.markNeedReboot()
+            } else {
+                logs.add(" Restore failed")
+                error = result.err.joinToString("\n")
+            }
+            logs.add("****************************")
+            patchdone = true
+        } finally {
+            patching = false
         }
     }
 

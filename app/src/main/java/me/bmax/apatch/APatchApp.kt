@@ -56,6 +56,14 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
         private const val APD_LINK_PATH = APATCH_BIN_FOLDER + "apd"
         const val PACKAGE_CONFIG_FILE = APATCH_FOLDER + "package_config"
         const val SU_PATH_FILE = APATCH_FOLDER + "su_path"
+
+        /**
+         * Persisted all-allow SELinux context. Only the LKM (ramdisk/init_boot
+         * and jailbreak) reads it, and it reads it at module init — i.e. before
+         * this app runs — which is why the domain has to be written to a file
+         * and not just pushed through a supercall.
+         */
+        const val SU_SCTX_FILE = APATCH_FOLDER + "su_sctx"
         const val SAFEMODE_FILE = "/dev/.safemode"
         private const val NEED_REBOOT_FILE = "/dev/.need_reboot"
         const val GLOBAL_NAMESPACE_FILE = "/data/adb/.global_namespace_enable"
@@ -79,11 +87,22 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
         const val DEFAULT_SCONTEXT = "u:r:untrusted_app:s0"
         const val MAGISK_SCONTEXT = "u:r:magisk:s0"
 
+        /**
+         * The domain KernelPatch grants root in when its SELinux AVC bypass is
+         * armed. Patching through the ramdisk (`kpramdisk`, init_boot) loads
+         * `/kernelpatch.ko` via kpinit, and that module arms the bypass with
+         * this domain by default, so an init_boot-patched device gets a kernel
+         * domain su instead of a borrowed magisk one.
+         */
+        const val KERNEL_SCONTEXT = "u:r:kernel:s0"
+
         private const val DEFAULT_SU_PATH = "/system/bin/kp"
         private const val LEGACY_SU_PATH = "/system/bin/su"
 
         const val SP_NAME = "config"
         private const val SHOW_BACKUP_WARN = "show_backup_warning"
+        /** Prefer the kernel-provided domain (u:r:kernel:s0) over the legacy magisk one. */
+        private const val PREF_KERNEL_DOMAIN = "kernel_su_domain"
         lateinit var sharedPreferences: SharedPreferences
 
         private val logCallback: CallbackList<String?> = object : CallbackList<String?>() {
@@ -178,12 +197,90 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
             Log.d(TAG, "APatch installed...")
             _apStateLiveData.postValue(State.ANDROIDPATCH_INSTALLED)
         }
-
         fun markNeedReboot() {
             val result = rootShellForResult("touch $NEED_REBOOT_FILE")
             _kpStateLiveData.postValue(State.KERNELPATCH_NEED_REBOOT)
             Log.d(TAG, "mark reboot ${result.code}")
         }
+
+        /**
+         * SELinux domain every root shell and granted profile is built with.
+         *
+         * KernelPatch keeps one "all-allow" context and arms its AVC bypass with
+         * it, so the granted process may do anything from that domain. The
+         * kernel is the source of truth: it is asked (and, when the user wants
+         * the legacy behaviour, told) what to use, because
+         *
+         *  - a device patched through the ramdisk/init_boot path loads the LKM
+         *    with kpinit, and that module arms the bypass with u:r:kernel:s0,
+         *    while
+         *  - a device whose kernel image was patched by an older kpimg still
+         *    reports nothing we can read, and must keep the magisk domain it
+         *    worked with before.
+         *
+         * Starts on the magisk domain so any failure keeps the old behaviour.
+         */
+        @Volatile
+        var allAllowScontext: String = MAGISK_SCONTEXT
+            private set
+
+        /**
+         * Ask KernelPatch for the domain root should end up in and adopt the
+         * answer. Must not run before [superKey] is resolved: every supercall
+         * below authenticates against it.
+         */
+        @Synchronized
+        fun applySuScontext() {
+            if (superKey.isEmpty()) return
+
+            // Explicitly requesting magisk is the escape hatch for tools that
+            // only work from that domain; by default the kernel decides.
+            val override = if (sharedPreferences.getBoolean(PREF_KERNEL_DOMAIN, true)) {
+                ""
+            } else {
+                MAGISK_SCONTEXT
+            }
+            if (override.isNotEmpty()) {
+                val rc = runCatching { Natives.setAllAllowSctx(override) }.getOrDefault(-1L)
+                Log.i(TAG, "su scontext requested: $override rc=$rc")
+            }
+
+            val reported = runCatching { Natives.allAllowSctx() }.getOrDefault("")
+            // Empty means "no all-allow context the kernel can tell us about".
+            val effective = reported.ifEmpty { MAGISK_SCONTEXT }
+            Log.i(TAG, "su scontext: kernel='$reported' effective='$effective'")
+
+            if (effective != allAllowScontext) {
+                allAllowScontext = effective
+                // Root shells bake the domain in as an argument, so the live
+                // ones have to be rebuilt before they reflect the change.
+                runCatching { APatchCli.refresh() }
+                    .onFailure { Log.w(TAG, "refresh root shells failed: $it") }
+            }
+
+            // On an init_boot-patched device the ko is loaded before this app,
+            // so a forced domain has to be on disk to survive the next reboot.
+            runCatching {
+                rootShellForResult(
+                    "mkdir -p $APATCH_FOLDER",
+                    if (override.isEmpty()) {
+                        "rm -f $SU_SCTX_FILE"
+                    } else {
+                        "echo $override > $SU_SCTX_FILE"
+                    },
+                )
+            }.onFailure { Log.w(TAG, "persist su scontext failed: $it") }
+        }
+
+        fun isKernelDomainPreferred(): Boolean =
+            sharedPreferences.getBoolean(PREF_KERNEL_DOMAIN, true)
+
+        /** Switch between the kernel domain and the legacy magisk domain. */
+        fun setKernelDomainPreferred(enabled: Boolean) {
+            sharedPreferences.edit { putBoolean(PREF_KERNEL_DOMAIN, enabled) }
+            thread { applySuScontext() }
+        }
+
 
 
         var superKey: String = ""
@@ -203,6 +300,10 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
                         Log.e(TAG, "Native.su failed")
                         return@thread
                     }
+                    // Adopt whatever domain the kernel says root should use
+                    // (u:r:kernel:s0 on a ramdisk/init_boot-patched device).
+                    runCatching { applySuScontext() }
+                        .onFailure { Log.w(TAG, "applySuScontext failed: $it") }
 
                     // KernelPatch version
                     //val buildV = Version.buildKPVUInt()

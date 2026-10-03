@@ -201,7 +201,7 @@ class SuperUserViewModel : ViewModel() {
             config.copy(
                 allow = 1,
                 exclude = 0,
-                profile = config.profile.copy(uid = app.uid, scontext = APApplication.MAGISK_SCONTEXT)
+                profile = config.profile.copy(uid = app.uid, scontext = APApplication.allAllowScontext)
             )
         } else {
             config.copy(allow = 0, profile = config.profile.copy(uid = app.uid))

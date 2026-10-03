@@ -59,6 +59,49 @@ jlong nativeSu(JNIEnv *env, jobject /* this */, jstring super_key_jstr, jint to_
     return rc;
 }
 
+/*
+ * The SELinux domain the kernel currently hands to a granted root.
+ *
+ * KernelPatch arms its AVC bypass with a single "all-allow" context
+ * (commit_common_su + bypass_selinux), and since 0.13.9 that context defaults
+ * to u:r:kernel:s0 instead of u:r:magisk:s0. The manager has to ask the kernel
+ * which one is live instead of assuming, both because the two need a different
+ * `-Z` when building a root shell and because the value is only meaningful
+ * when the bypass is actually armed (the command does not exist at all on
+ * older kernels). Empty output means "no all-allow context": use the magisk
+ * domain the manager hardcoded before.
+ */
+jstring nativeGetAllAllowSctx(JNIEnv *env, jobject /* this */, jstring super_key_jstr) {
+    ensureSuperKeyNonNull(super_key_jstr);
+
+    const auto super_key = JUTFString(env, super_key_jstr);
+    char buf[SUPERCALL_SCONTEXT_LEN] = { '\0' };
+    long rc = sc_su_get_all_allow_sctx(super_key.get(), buf, sizeof(buf));
+    if (rc < 0) [[unlikely]] {
+        LOGW("nativeGetAllAllowSctx rc: %ld", rc);
+    }
+
+    return env->NewStringUTF(buf);
+}
+
+/*
+ * Retarget the all-allow context at runtime (SUPERCALL_SU_SET_ALLOW_SCTX).
+ * An empty string clears it. Fails on kernels without the command, which is
+ * how the caller learns the device can only use the magisk domain.
+ */
+jlong nativeSetAllAllowSctx(JNIEnv *env, jobject /* this */, jstring super_key_jstr, jstring scontext_jstr) {
+    ensureSuperKeyNonNull(super_key_jstr);
+
+    const auto super_key = JUTFString(env, super_key_jstr);
+    const auto scontext = JUTFString(env, scontext_jstr);
+    long rc = sc_su_reset_all_allow_sctx(super_key.get(), scontext.get());
+    if (rc < 0) [[unlikely]] {
+        LOGW("nativeSetAllAllowSctx(%s) rc: %ld", scontext.get(), rc);
+    }
+
+    return rc;
+}
+
 jint nativeSetUidExclude(JNIEnv *env, jobject /* this */, jstring super_key_jstr, jint uid, jint exclude) {
     ensureSuperKeyNonNull(super_key_jstr);
 
@@ -323,6 +366,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM* vm, void * /*reserved*/) {
         {"nativeKernelPatchVersion", "(Ljava/lang/String;)J", reinterpret_cast<void *>(&nativeKernelPatchVersion)},
         {"nativeKernelPatchBuildTime", "(Ljava/lang/String;)Ljava/lang/String;", reinterpret_cast<void *>(&nativeKernelPatchBuildTime)},
         {"nativeSu", "(Ljava/lang/String;ILjava/lang/String;)J", reinterpret_cast<void *>(&nativeSu)},
+        {"nativeGetAllAllowSctx", "(Ljava/lang/String;)Ljava/lang/String;", reinterpret_cast<void *>(&nativeGetAllAllowSctx)},
+        {"nativeSetAllAllowSctx", "(Ljava/lang/String;Ljava/lang/String;)J", reinterpret_cast<void *>(&nativeSetAllAllowSctx)},
         {"nativeSetUidExclude", "(Ljava/lang/String;II)I", reinterpret_cast<void *>(&nativeSetUidExclude)},
         {"nativeGetUidExclude", "(Ljava/lang/String;I)I", reinterpret_cast<void *>(&nativeGetUidExclude)},
         {"nativeSuUids", "(Ljava/lang/String;)[I", reinterpret_cast<void *>(&nativeSuUids)},

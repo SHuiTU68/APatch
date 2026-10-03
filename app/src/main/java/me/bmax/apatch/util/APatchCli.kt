@@ -39,7 +39,7 @@ fun createRootShell(globalMnt: Boolean = false): Shell {
     val builder = Shell.Builder.create().setInitializers(RootShellInitializer::class.java)
     return try {
         builder.build(
-            SUPERCMD, APApplication.superKey, "-Z", APApplication.MAGISK_SCONTEXT
+            SUPERCMD, APApplication.superKey, "-Z", APApplication.allAllowScontext
         )
     } catch (e: Throwable) {
         Log.e(TAG, "su failed: ", e)
@@ -47,11 +47,11 @@ fun createRootShell(globalMnt: Boolean = false): Shell {
             Log.e(TAG, "retry compat kpatch su")
             if (globalMnt) {
                 builder.build(
-                    getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.MAGISK_SCONTEXT, "--mount-master"
+                    getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.allAllowScontext, "--mount-master"
                 )
             }else{
                 builder.build(
-                    getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.MAGISK_SCONTEXT
+                    getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.allAllowScontext
                 )
             }
         } catch (e: Throwable) {
@@ -75,10 +75,10 @@ private fun createMainRootShell() : Shell {
     val builder = Shell.Builder.create()
         .setInitializers(RootShellInitializer::class.java)
     val shell = try {
-        builder.build(SUPERCMD, APApplication.superKey, "-Z", APApplication.MAGISK_SCONTEXT)
+        builder.build(SUPERCMD, APApplication.superKey, "-Z", APApplication.allAllowScontext)
     } catch (e: Throwable) {
         Log.e(TAG, "su failed: ", e)
-        builder.setCommands(getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.MAGISK_SCONTEXT)
+        builder.setCommands(getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.allAllowScontext)
         try {
             builder.build()
         } catch (e: Throwable) {
@@ -101,7 +101,14 @@ private fun createMainRootShell() : Shell {
 object APatchCli {
     @Volatile
     var SHELL: Shell = createMainRootShell()
-    val GLOBAL_MNT_SHELL: Shell = createRootShell(true)
+
+    /**
+     * Same, but built with the global mount namespace. The SELinux domain is
+     * baked into the shell as an argument, so this has to be rebuilt whenever
+     * [APApplication.allAllowScontext] changes.
+     */
+    @Volatile
+    var GLOBAL_MNT_SHELL: Shell = createRootShell(true)
 
     // Serialized so a reader can never observe the half-reset MainShell (private
     // fields cleared via reflection) between the reset and the SHELL swap.
@@ -132,6 +139,10 @@ object APatchCli {
 
         SHELL = createMainRootShell()
         tmp.close()
+        // The domain lives in the shell arguments as well.
+        val tmpGlobal = GLOBAL_MNT_SHELL
+        GLOBAL_MNT_SHELL = createRootShell(true)
+        tmpGlobal.close()
     }
 }
 
@@ -159,14 +170,14 @@ fun tryGetRootShell(): Shell {
     val builder = Shell.Builder.create()
     return try {
         builder.build(
-            SUPERCMD, APApplication.superKey, "-Z", APApplication.MAGISK_SCONTEXT
+            SUPERCMD, APApplication.superKey, "-Z", APApplication.allAllowScontext
         )
     } catch (e: Throwable) {
         Log.e(TAG, "su failed: ", e)
         return try {
             Log.e(TAG, "retry compat kpatch su")
             builder.build(
-                getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.MAGISK_SCONTEXT
+                getKPatchPath(), APApplication.superKey, "su", "-Z", APApplication.allAllowScontext
             )
         } catch (e: Throwable) {
             Log.e(TAG, "retry kpatch su failed: ", e)

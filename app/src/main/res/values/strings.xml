@@ -97,15 +97,21 @@
     <string name="patch_mode_patch_and_install">Mode: Patch and install</string>
     <string name="patch_mode_install_to_next_slot">Mode: Install to inactive slot (After OTA)</string>
     <string name="patch_mode_uninstall_patch">Mode: Uninstall KPatch</string>
+    <string name="patch_mode_ramdisk_patch">Mode: Patch init_boot (ramdisk)</string>
+    <string name="patch_mode_ramdisk_patch_and_install">Mode: Patch and install init_boot (ramdisk)</string>
+    <string name="patch_mode_ramdisk_uninstall">Mode: Uninstall KPatch from init_boot (ramdisk)</string>
     <string name="patch_select_bootimg_btn">Select boot</string>
+    <string name="patch_select_init_boot_btn">Select init_boot</string>
     <string name="patch_embed_kpm_btn">Embed KPM</string>
     <string name="patch_start_patch_btn">Start</string>
     <string name="patch_start_unpatch_btn">UnPatch</string>
     <string name="patch_item_error">!!ERROR!!</string>
     <string name="patch_item_bootimg">bootimg</string>
+    <string name="patch_item_init_boot">init_boot (first stage ramdisk)</string>
     <string name="patch_item_bootimg_slot">Slot:</string>
     <string name="patch_item_bootimg_dev">Device:</string>
     <string name="patch_item_kernel">Kernel</string>
+    <string name="patch_item_ramdisk">First stage ramdisk</string>
     <string name="patch_item_kpimg">kpimg</string>
     <string name="patch_item_kpimg_version">Version:</string>
     <string name="patch_item_kpimg_comile_time">Time:</string>
@@ -224,6 +230,10 @@
     <string name="mode_select_page_patch_and_install">Patch and install</string>
     <string name="mode_select_page_select_file">Select a boot image to patch</string>
     <string name="mode_select_page_install_inactive_slot">Install to inactive slot (After OTA)</string>
+    <string name="mode_select_page_select_init_boot">Select an init_boot image to patch (first stage ramdisk)</string>
+    <string name="mode_select_page_ramdisk_install">Patch and install init_boot (ramdisk)</string>
+    <string name="mode_select_page_ramdisk_install_summary">Injects kpinit and kernelpatch.ko into the first stage ramdisk. Use this when the kernel itself cannot be patched, or the device ships its kernel inside init_boot.</string>
+    <string name="mode_select_page_restore_init_boot">Restore the stock init_boot (ramdisk)</string>
     <string name="mode_select_page_install_inactive_slot_warning">Your device will be **FORCED** to boot to the current inactive slot after a reboot!\nOnly use this option after OTA is done.\nContinue?</string>
 
     <string name="home_more_menu_feedback_or_suggestion">Feedback or suggestion</string>
