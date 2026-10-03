@@ -8,6 +8,12 @@ plugins {
 // apd/build.rs derives its copy from it as well.
 project.ext.set("kernelPatchVersion", getKernelPatchVersion())
 
+// GitHub repo (owner/name) whose KernelPatch release assets (kpimg, kptools,
+// <kmi>_kernelpatch.ko) are downloaded while building the manager.
+// Override per build with -PkernelPatchRepo=owner/repo, or permanently in
+// gradle.properties.
+project.ext.set("kernelPatchRepo", getKernelPatchRepo())
+
 extra.set("androidMinSdkVersion", 26)
 extra.set("androidTargetSdkVersion", 36)
 extra.set("androidCompileSdkVersion", 37)
@@ -42,6 +48,12 @@ fun getKernelPatchVersion(): String {
         .find(header)?.groupValues?.get(1)
         ?: error("$name not found in app/src/main/cpp/version")
     return "${part("MAJOR")}.${part("MINOR")}.${part("PATCH")}"
+}
+
+fun getKernelPatchRepo(): String {
+    val override = (findProperty("kernelPatchRepo") as String?)?.trim()
+    if (!override.isNullOrEmpty()) return override
+    return "SHuiTU68/KernelPatch"
 }
 
 fun getBranch(): String {

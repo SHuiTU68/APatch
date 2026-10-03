@@ -22,6 +22,7 @@ val managerVersionCode: Int = rootProject.extra["managerVersionCode"] as Int
 val managerVersionName: String = rootProject.extra["managerVersionName"] as String
 val branchName: String = rootProject.extra["branchName"] as String
 val kernelPatchVersion: String = rootProject.extra["kernelPatchVersion"] as String
+val kernelPatchRepo: String = rootProject.extra["kernelPatchRepo"] as String
 
 apksign {
     storeFileProperty = "KEYSTORE_FILE"
@@ -237,20 +238,22 @@ fun downloadFileRetry(url: String, destFile: File, maxRetries: Int = 5) {
 
 registerDownloadTask(
     taskName = "downloadKpimg",
-    srcUrl = "https://github.com/bmax121/KernelPatch/releases/download/$kernelPatchVersion/kpimg-android",
+    srcUrl = "https://github.com/$kernelPatchRepo/releases/download/$kernelPatchVersion/kpimg-android",
     destPath = "${project.projectDir}/src/main/assets/kpimg",
     project = project
 )
 
 registerDownloadTask(
     taskName = "downloadKptools",
-    srcUrl = "https://github.com/bmax121/KernelPatch/releases/download/$kernelPatchVersion/kptools-android",
+    srcUrl = "https://github.com/$kernelPatchRepo/releases/download/$kernelPatchVersion/kptools-android",
     destPath = "${project.projectDir}/libs/arm64-v8a/libkptools.so",
     project = project
 )
 
 // Compat kp version less than 0.10.7
 // TODO: Remove in future
+// NOTE: kept on the upstream repo on purpose - the 0.10.7 release only exists
+// there, and this is a legacy userspace binary (it never provides root).
 registerDownloadTask(
     taskName = "downloadCompatKpatch",
     srcUrl = "https://github.com/bmax121/KernelPatch/releases/download/0.10.7/kpatch-android",
@@ -271,7 +274,7 @@ tasks.register("downloadJailbreakKo") {
         assetsDir.mkdirs()
         jailbreakKmis.forEach { kmi ->
             val srcUrl =
-                "https://github.com/bmax121/KernelPatch/releases/download/$kernelPatchVersion/${kmi}_kernelpatch.ko"
+                "https://github.com/$kernelPatchRepo/releases/download/$kernelPatchVersion/${kmi}_kernelpatch.ko"
             val destFile = File(assetsDir, "${kmi}_kernelpatch.ko")
             if (!destFile.exists()) {
                 println(" - Downloading $srcUrl to ${destFile.absolutePath}")
