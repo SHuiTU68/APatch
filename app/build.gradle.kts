@@ -189,7 +189,7 @@ fun registerDownloadTask(
         doLast {
             if (!destFile.exists() || isFileUpdated(srcUrl, destFile)) {
                 println(" - Downloading $srcUrl to ${destFile.absolutePath}")
-                downloadFile(srcUrl, destFile)
+                downloadFileRetry(srcUrl, destFile)
                 println(" - Download completed.")
             } else {
                 println(" - File is up-to-date, skipping download.")
@@ -199,16 +199,16 @@ fun registerDownloadTask(
 }
 
 fun isFileUpdated(url: String, localFile: File): Boolean {
-    val connection = URI.create(url).toURL().openConnection()
-    val remoteLastModified = connection.getHeaderFieldDate("Last-Modified", 0L)
-    return remoteLastModified > localFile.lastModified()
-}
-
-fun downloadFile(url: String, destFile: File) {
-    URI.create(url).toURL().openStream().use { input ->
-        destFile.outputStream().use { output ->
-            input.copyTo(output)
-        }
+    return try {
+        val connection = URI.create(url).toURL().openConnection()
+        connection.connectTimeout = 15000
+        connection.readTimeout = 15000
+        val remoteLastModified = connection.getHeaderFieldDate("Last-Modified", 0L)
+        remoteLastModified > localFile.lastModified()
+    } catch (e: Exception) {
+        // If we can't check the remote, assume an update is needed and let
+        // downloadFileRetry handle the actual download with retries.
+        true
     }
 }
 
@@ -283,6 +283,73 @@ tasks.register("downloadJailbreakKo") {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Patch the downloaded KernelPatch image so it trusts THIS build's manager
+// signing certificate.
+//
+// The stock kpimg only trusts the official APatch manager certificate: at boot
+// the kernel scans /data/app for "me.bmax.apatch", verifies the APK's v2
+// signature against the SHA256 of its signing certificate DER, and only then
+// marks that UID as the trusted manager (which is what grants root when the
+// manager authenticates with the default superkey "su"). A manager signed with
+// this fork's own keystore never matches that digest, so it gets no root.
+//
+// Here we replace the embedded digest for "me.bmax.apatch" with the SHA256 of
+// the fork's signing certificate (apatch-signing.jks). The byte pattern is
+// verified to appear exactly once in kpimg-android for KernelPatch 0.13.6, so
+// the task fails loudly instead of silently shipping a rootless build if the
+// pattern ever changes.
+// ---------------------------------------------------------------------------
+
+val apatchOfficialManagerCertDigest = byteArrayOf(
+    0xd7.toByte(), 0x1d.toByte(), 0xad.toByte(), 0xc0.toByte(), 0xca.toByte(), 0x07.toByte(), 0xbd.toByte(), 0xf5.toByte(),
+    0x94.toByte(), 0x38.toByte(), 0x3b.toByte(), 0xfb.toByte(), 0x2a.toByte(), 0x44.toByte(), 0x51.toByte(), 0x34.toByte(),
+    0xa0.toByte(), 0x73.toByte(), 0x39.toByte(), 0xf1.toByte(), 0x2a.toByte(), 0x27.toByte(), 0x04.toByte(), 0x4a.toByte(),
+    0x1b.toByte(), 0x32.toByte(), 0x69.toByte(), 0x81.toByte(), 0xac.toByte(), 0xf5.toByte(), 0xf3.toByte(), 0x19.toByte()
+)
+
+val forkManagerCertDigest = byteArrayOf(
+    0x7a.toByte(), 0x94.toByte(), 0x37.toByte(), 0x76.toByte(), 0x28.toByte(), 0x12.toByte(), 0x10.toByte(), 0xef.toByte(),
+    0x2c.toByte(), 0xe0.toByte(), 0x10.toByte(), 0xaa.toByte(), 0xfb.toByte(), 0xfd.toByte(), 0xf9.toByte(), 0x2b.toByte(),
+    0xa0.toByte(), 0x32.toByte(), 0x67.toByte(), 0x3a.toByte(), 0x37.toByte(), 0x89.toByte(), 0x3d.toByte(), 0x2a.toByte(),
+    0xa1.toByte(), 0x71.toByte(), 0x63.toByte(), 0xc1.toByte(), 0x76.toByte(), 0x99.toByte(), 0x1c.toByte(), 0xb4.toByte()
+)
+
+fun indexOfSubArray(haystack: ByteArray, needle: ByteArray): Int {
+    if (needle.isEmpty() || needle.size > haystack.size) return -1
+    outer@ for (i in 0..haystack.size - needle.size) {
+        for (j in needle.indices) {
+            if (haystack[i + j] != needle[j]) continue@outer
+        }
+        return i
+    }
+    return -1
+}
+
+tasks.register("patchKpimg") {
+    dependsOn("downloadKpimg")
+    doLast {
+        val kpimgFile = file("${project.projectDir}/src/main/assets/kpimg")
+        if (!kpimgFile.exists()) {
+            throw GradleException("kpimg not found: ${kpimgFile.absolutePath}")
+        }
+        val data = kpimgFile.readBytes()
+        val officialIdx = indexOfSubArray(data, apatchOfficialManagerCertDigest)
+        val alreadyPatched = indexOfSubArray(data, forkManagerCertDigest) != -1
+        when {
+            officialIdx != -1 -> {
+                System.arraycopy(forkManagerCertDigest, 0, data, officialIdx, forkManagerCertDigest.size)
+                kpimgFile.writeBytes(data)
+                println(" - patched kpimg trusted manager digest @ offset $officialIdx")
+            }
+            alreadyPatched -> println(" - kpimg already patched with fork digest, skipping")
+            else -> throw GradleException(
+                "kpimg trusted manager digest pattern not found; KernelPatch version bumped?"
+            )
+        }
+    }
+}
+
 tasks.register<Copy>("mergeScripts") {
     into("${project.projectDir}/src/main/resources/META-INF/com/google/android")
     from(rootProject.file("${project.rootDir}/scripts/update_binary.sh")) {
@@ -295,6 +362,7 @@ tasks.register<Copy>("mergeScripts") {
 
 tasks.getByName("preBuild").dependsOn(
     "downloadKpimg",
+    "patchKpimg",
     "downloadKptools",
     "downloadCompatKpatch",
     "downloadJailbreakKo",

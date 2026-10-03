@@ -20,7 +20,7 @@ fn parse_kmi(release: &str) -> Option<String> {
     Some(format!("{android}-{kernel}"))
 }
 
-fn kernel_release() -> Option<String> {
+pub fn kernel_release() -> Option<String> {
     let mut uts: libc::utsname = unsafe { std::mem::zeroed() };
     if unsafe { libc::uname(&mut uts) } != 0 {
         return None;

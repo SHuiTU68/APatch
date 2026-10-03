@@ -460,6 +460,16 @@ fun setGlobalNamespaceEnabled(value: String) {
         }
 }
 
+/** Whether the built-in NoMount (VFS path redirection) metamodule is enabled. */
+fun isNoMountEnabled(): Boolean {
+    return runCatching { SuFile(APApplication.NOMOUNT_ENABLE_FILE).exists() }.getOrDefault(false)
+}
+
+/** Enable/disable the built-in NoMount metamodule through apd. */
+fun setNoMountEnabled(enabled: Boolean): Boolean {
+    return execApd(if (enabled) "nomount enable" else "nomount disable")
+}
+
 fun getFileNameFromUri(context: Context, uri: Uri): String? {
     var fileName: String? = null
     val contentResolver: ContentResolver = context.contentResolver

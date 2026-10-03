@@ -1,4 +1,7 @@
-use crate::{defs, event, insmod, late_load, lua, magica, module, module_config, supercall, utils};
+use crate::{
+    defs, event, insmod, late_load, lua, magica, module, module_config, nomount, nomount_inject,
+    supercall, utils,
+};
 #[cfg(target_os = "android")]
 use android_logger::Config;
 use anyhow::{Context, Result};
@@ -79,6 +82,13 @@ enum Commands {
         /// Arguments passed to resetprop
         #[arg(trailing_var_arg = true, allow_hyphen_values = true, num_args = 0..)]
         args: Vec<String>,
+    },
+
+    /// Manage the built-in NoMount (VFS path redirection) metamodule
+    #[command(name = "nomount")]
+    NoMount {
+        #[command(subcommand)]
+        command: NoMount,
     },
 
     /// MagiskPolicy - SELinux Policy Patch Tool
@@ -191,6 +201,154 @@ enum Sepolicy {
         /// sepolicy statements
         sepolicy: String,
     },
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMount {
+    /// Enable the built-in NoMount feature
+    Enable,
+    /// Disable the built-in NoMount feature
+    Disable,
+    /// Show NoMount status
+    Status,
+    /// Natively inject all active module files now (no reboot needed)
+    Inject,
+    /// Manage VFS path redirection rules
+    Rule {
+        #[command(subcommand)]
+        command: NoMountRule,
+    },
+    /// Manage exclusion-list UIDs
+    Uid {
+        #[command(subcommand)]
+        command: NoMountUid,
+    },
+    /// Manage hide rules (Kasumi-style, kprobe-free)
+    Hide {
+        #[command(subcommand)]
+        command: NoMountHide,
+    },
+    /// Hot load/unload one module's VFS rules
+    Module {
+        #[command(subcommand)]
+        command: NoMountModule,
+    },
+    /// Clear rules / uids / everything
+    Clear {
+        /// what to clear: all, rules, or uid
+        what: String,
+    },
+    /// Print the NoMount kernel driver version
+    Version,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountRule {
+    /// Add VFS redirection rule(s): <vpath> <rpath> [<vpath> <rpath> ...]
+    Add {
+        /// virtual path(s) followed by their real path(s)
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+        /// treat each entry as a whiteout (only vpath is given)
+        #[arg(long)]
+        whiteout: bool,
+    },
+    /// Remove VFS redirection rule(s): <vpath> [<vpath> ...]
+    Del {
+        /// virtual path(s) to remove
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// List VFS redirection rules
+    List {
+        /// output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove all VFS redirection rules
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountUid {
+    /// Add an app uid to the exclusion list
+    Add { uid: u32 },
+    /// Remove an app uid from the exclusion list
+    Del { uid: u32 },
+    /// List blocked uids (JSON array)
+    List,
+    /// Remove all blocked uids
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountHide {
+    /// Add hide rule(s): <path> [<path> ...]
+    ///
+    /// Flags select what to hide on the given path(s):
+    ///   --mountinfo  drop matching lines from /proc/self/mountinfo
+    ///   --mounts     drop matching lines from /proc/self/mounts
+    ///   --maps       drop matching lines from /proc/self/maps
+    ///   --smaps      drop matching lines from /proc/self/smaps
+    ///   --statfs     forge the filesystem type (f_type) for the sb backing <path>
+    /// Flags may be combined; at least one is required.
+    Add {
+        /// hide path(s) (proc file line field prefix, or path for statfs)
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// drop lines from /proc/self/mountinfo whose fields contain <path>
+        #[arg(long)]
+        mountinfo: bool,
+        /// drop lines from /proc/self/mounts whose fields contain <path>
+        #[arg(long)]
+        mounts: bool,
+        /// drop lines from /proc/self/maps whose fields contain <path>
+        #[arg(long)]
+        maps: bool,
+        /// drop lines from /proc/self/smaps whose fields contain <path>
+        #[arg(long)]
+        smaps: bool,
+        /// forge statfs(2) f_type on the superblock backing <path>
+        #[arg(long)]
+        statfs: bool,
+        /// f_type value for --statfs (decimal; 0 means off)
+        #[arg(long, default_value_t = 0)]
+        f_type: u32,
+        /// restrict the rule to a specific reader uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// Remove hide rule(s): <path> [<path> ...]
+    Del {
+        /// hide path(s) to remove
+        #[arg(required = true, num_args = 1..)]
+        paths: Vec<String>,
+        /// restrict the rules to a specific uid
+        #[arg(long)]
+        uid: Option<u32>,
+    },
+    /// List hide rules
+    List {
+        /// output JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove all hide rules
+    Clear,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum NoMountModule {
+    /// Hot-inject one module's files into the VFS rules
+    Inject { id: String },
+    /// Hot-unload one module's files from the VFS rules
+    Unload { id: String },
 }
 
 pub fn run() -> Result<()> {
@@ -375,6 +533,90 @@ pub fn run() -> Result<()> {
             full_args.extend(args);
             crate::resetprop::resetprop_main(&full_args)
         }
+
+        Commands::NoMount { command } => match command {
+            NoMount::Enable => nomount::enable(),
+            NoMount::Disable => nomount::disable(),
+            NoMount::Status => nomount::status(),
+            NoMount::Inject => nomount::inject(),
+            NoMount::Rule { command } => match command {
+                NoMountRule::Add {
+                    paths,
+                    uid,
+                    whiteout,
+                } => {
+                    let uid = uid.unwrap_or(0);
+                    if !whiteout && paths.len() % 2 != 0 {
+                        anyhow::bail!(
+                            "nomount: rule add needs an even number of <vpath> <rpath> pairs \
+                             (or --whiteout with vpaths only)"
+                        );
+                    }
+                    let rules: Vec<(String, Option<String>)> = if whiteout {
+                        paths.into_iter().map(|p| (p, None)).collect()
+                    } else {
+                        paths
+                            .chunks_exact(2)
+                            .map(|c| (c[0].clone(), Some(c[1].clone())))
+                            .collect()
+                    };
+                    nomount::rule_add(&rules, uid, whiteout)
+                }
+                NoMountRule::Del { paths, uid } => nomount::rule_del(&paths, uid.unwrap_or(0)),
+                NoMountRule::List { json } => nomount::rule_list(json),
+                NoMountRule::Clear => nomount::rule_clear(),
+            },
+            NoMount::Uid { command } => match command {
+                NoMountUid::Add { uid } => nomount::uid_add(uid),
+                NoMountUid::Del { uid } => nomount::uid_del(uid),
+                NoMountUid::List => nomount::uid_list(),
+                NoMountUid::Clear => nomount::uid_clear(),
+            },
+            NoMount::Hide { command } => match command {
+                NoMountHide::Add {
+                    paths,
+                    mountinfo,
+                    mounts,
+                    maps,
+                    smaps,
+                    statfs,
+                    f_type,
+                    uid,
+                } => {
+                    let mut flags: u32 = 0;
+                    if mountinfo {
+                        flags |= nomount_inject::NM_HIDE_MOUNTINFO;
+                    }
+                    if mounts {
+                        flags |= nomount_inject::NM_HIDE_MOUNTS;
+                    }
+                    if maps {
+                        flags |= nomount_inject::NM_HIDE_MAPS;
+                    }
+                    if smaps {
+                        flags |= nomount_inject::NM_HIDE_SMAPS;
+                    }
+                    if statfs {
+                        flags |= nomount_inject::NM_HIDE_STATFS;
+                    }
+                    if flags == 0 {
+                        anyhow::bail!(
+                            "nomount: hide add needs at least one of --mountinfo/--mounts/--maps/--smaps/--statfs"
+                        );
+                    }
+                    nomount::hide_add(flags, uid.unwrap_or(0), f_type, &paths)
+                }
+                NoMountHide::Del { paths, uid } => nomount::hide_del(uid.unwrap_or(0), &paths),
+                NoMountHide::List { json } => nomount::hide_list(json),
+                NoMountHide::Clear => nomount::hide_clear(),
+            },
+            NoMount::Module { command } => match command {
+                NoMountModule::Inject { id } => nomount::module_inject(&id),
+                NoMountModule::Unload { id } => nomount::module_unload(&id),
+            },
+            NoMount::Clear { what } => nomount::clear(what.as_str()),
+            NoMount::Version => nomount::version(),
+        },
 
         Commands::Sepolicy(sepolicy_args) => crate::sepolicy::execute(&sepolicy_args),
     };

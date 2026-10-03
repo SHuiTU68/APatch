@@ -726,6 +726,15 @@ fn _list_modules(path: &str) -> Vec<HashMap<String, String>> {
     for entry in dir.flatten() {
         let path = entry.path();
         info!("path: {}", path.display());
+
+        // The built-in NoMount metamodule is a manager-controlled, toggle-driven
+        // feature (enabled/disabled from settings), not a user-installed module.
+        // Keep it out of the module page so it does not show up as a module.
+        if path == Path::new(defs::NOMOUNT_MODULE_DIR) {
+            debug!("skip built-in NoMount module: {}", path.display());
+            continue;
+        }
+
         let module_prop = path.join("module.prop");
         if !module_prop.exists() {
             continue;

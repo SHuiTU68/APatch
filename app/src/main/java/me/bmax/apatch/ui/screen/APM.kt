@@ -104,6 +104,7 @@ import me.bmax.apatch.util.DownloadListener
 import me.bmax.apatch.util.download
 import me.bmax.apatch.util.hasMagisk
 import me.bmax.apatch.util.isJailbreakMode
+import me.bmax.apatch.util.isNoMountEnabled
 import me.bmax.apatch.util.reboot
 import me.bmax.apatch.util.toggleModule
 import me.bmax.apatch.util.ui.LocalSnackbarHost
@@ -246,6 +247,14 @@ private fun getMetaModuleWarningText(
     viewModel: APModuleViewModel,
     context: Context
 ) : String? {
+    // Built-in NoMount is toggle-controlled from settings, not a user-installed
+    // metamodule. Never show the metamodule warning for it: when the built-in
+    // feature is enabled it replaces the metamodule mount strategy entirely
+    // (there is no /data/adb/modules/nomount anymore).
+    if (isNoMountEnabled()) {
+        return null
+    }
+
     val needsMountModule = viewModel.moduleList.any { module ->
         val moduleDir = "/data/adb/modules/${module.id}"
 

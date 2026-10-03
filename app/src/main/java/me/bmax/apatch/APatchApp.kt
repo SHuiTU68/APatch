@@ -59,6 +59,8 @@ class APApplication : Application(), Thread.UncaughtExceptionHandler {
         const val SAFEMODE_FILE = "/dev/.safemode"
         private const val NEED_REBOOT_FILE = "/dev/.need_reboot"
         const val GLOBAL_NAMESPACE_FILE = "/data/adb/.global_namespace_enable"
+        /** Marker: presence means the built-in NoMount (VFS path redirection) metamodule is enabled. */
+        const val NOMOUNT_ENABLE_FILE = APATCH_FOLDER + "nomount_enable"
         const val SUCOMPAT_FILE = "/data/adb/ap/sucompat"
         const val SELINUX_HIDE_FILE = APATCH_FOLDER + "selinux_hide"
         const val JAILBREAK_FILE = APATCH_FOLDER + "jailbreak"

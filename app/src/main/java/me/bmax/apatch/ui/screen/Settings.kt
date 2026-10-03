@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.Commit
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeveloperMode
 import androidx.compose.material.icons.filled.Engineering
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.automirrored.filled.FeaturedPlayList
 import androidx.compose.material.icons.filled.FormatColorFill
 import androidx.compose.material.icons.filled.InvertColors
@@ -82,6 +83,8 @@ import androidx.core.content.edit
 import androidx.core.os.LocaleListCompat
 import com.ramcosta.composedestinations.annotation.Destination
 import com.ramcosta.composedestinations.annotation.RootGraph
+import com.ramcosta.composedestinations.generated.destinations.NoMountControlScreenDestination
+import com.ramcosta.composedestinations.navigation.DestinationsNavigator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -96,9 +99,11 @@ import me.bmax.apatch.util.getBugreportFile
 import me.bmax.apatch.util.getKernelVersionCode
 import me.bmax.apatch.util.isGkiKernel
 import me.bmax.apatch.util.isGlobalNamespaceEnabled
+import me.bmax.apatch.util.isNoMountEnabled
 import me.bmax.apatch.util.outputStream
 import me.bmax.apatch.util.rootShellForResult
 import me.bmax.apatch.util.setGlobalNamespaceEnabled
+import me.bmax.apatch.util.setNoMountEnabled
 import me.bmax.apatch.util.ui.APDialogBlurBehindUtils
 import me.bmax.apatch.util.ui.LocalSnackbarHost
 import me.bmax.apatch.util.ui.NavigationBarsSpacer
@@ -109,7 +114,7 @@ import java.util.Locale
 @Destination<RootGraph>
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-fun SettingScreen() {
+fun SettingScreen(navigator: DestinationsNavigator) {
     val state by APApplication.apStateLiveData.observeAsState(APApplication.State.UNKNOWN_STATE)
     val kPatchReady = state != APApplication.State.UNKNOWN_STATE
     val aPatchReady =
@@ -296,6 +301,47 @@ fun SettingScreen() {
                         onConfirm = { applySelinuxHide(true) },
                     )
                 }
+            }
+
+            // Built-in NoMount (VFS mount)
+            if (kPatchReady && aPatchReady) {
+                var noMountEnabled by rememberSaveable {
+                    mutableStateOf(false)
+                }
+                var noMountLoaded by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    noMountEnabled = withContext(Dispatchers.IO) { isNoMountEnabled() }
+                    noMountLoaded = true
+                }
+                SwitchItem(
+                    icon = Icons.Filled.Extension,
+                    title = stringResource(id = R.string.settings_nomount),
+                    summary = stringResource(id = R.string.settings_nomount_summary),
+                    checked = noMountEnabled,
+                    enabled = noMountLoaded,
+                    onCheckedChange = { enabled ->
+                        scope.launch(Dispatchers.IO) {
+                            val ok = setNoMountEnabled(enabled)
+                            if (ok) {
+                                noMountEnabled = enabled
+                            }
+                        }
+                    })
+                ListItem(
+                    leadingContent = {
+                        Icon(Icons.Filled.Extension, stringResource(id = R.string.nomount_control_entry))
+                    },
+                    headlineContent = { Text(stringResource(id = R.string.nomount_control_entry)) },
+                    supportingContent = {
+                        Text(
+                            text = stringResource(id = R.string.nomount_control_entry_summary),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    },
+                    modifier = Modifier.clickable {
+                        navigator.navigate(NoMountControlScreenDestination)
+                    })
             }
 
             // WebView Debug
