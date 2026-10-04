@@ -229,7 +229,6 @@
     <string name="mode_select_page_title">Install</string>
     <string name="mode_select_page_patch_and_install">Patch and install</string>
     <string name="mode_select_page_select_file">Select a boot image to patch</string>
-    <string name="mode_select_page_select_file_summary">boot.img or init_boot.img — the type is detected automatically</string>
     <string name="mode_select_page_install_inactive_slot">Install to inactive slot (After OTA)</string>
     <string name="mode_select_page_select_init_boot">Select an init_boot image to patch (first stage ramdisk)</string>
     <string name="mode_select_page_ramdisk_install">Patch and install init_boot (ramdisk)</string>

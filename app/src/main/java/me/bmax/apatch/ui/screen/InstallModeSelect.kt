@@ -87,10 +87,7 @@ sealed class InstallMethod {
     data class SelectFile(
         val uri: Uri? = null,
         @param:StringRes override val label: Int = R.string.mode_select_page_select_file,
-    ) : InstallMethod() {
-        override val summary: Int
-            get() = R.string.mode_select_page_select_file_summary
-    }
+    ) : InstallMethod()
 
     data object DirectInstall : InstallMethod() {
         override val label: Int
